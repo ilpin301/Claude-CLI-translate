@@ -6,3 +6,4 @@ __pycache__/
 .pytest_cache/
 # Local screenshots (root only)
 /*.jpg
+HANDOFF.md
