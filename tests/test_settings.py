@@ -47,7 +47,8 @@ def test_save_creates_missing_folder(tmp_path):
 
 def test_defaults_are_complete_and_independent():
     a, b = settings.normalize(None), settings.normalize(None)
-    assert a == settings.DEFAULTS | {"allowlist": ["windowsterminal.exe"]}
+    assert a == settings.DEFAULTS | {"allowlist": ["windowsterminal.exe"],
+                                     "allowlist_classes": ["consolewindowclass"]}
     a["allowlist"].append("x.exe")
     assert b["allowlist"] == ["windowsterminal.exe"]
 
@@ -55,7 +56,8 @@ def test_defaults_are_complete_and_independent():
 def test_full_roundtrip(tmp_path):
     p = str(tmp_path / "s.json")
     custom = {"font_px": 19, "target_lang": "de", "scope": "all", "enabled": False,
-              "proxy_mode": "system", "allowlist": ["wt.exe", "code.exe"], "first_run_done": True}
+              "proxy_mode": "system", "allowlist": ["wt.exe", "code.exe"],
+              "allowlist_classes": ["consolewindowclass", "myclass"], "first_run_done": True}
     settings.save(custom, p)
     assert settings.load(p) == custom
 
@@ -78,13 +80,28 @@ def test_allowlist_cleaning():
     assert settings.clean_allowlist("code.exe") == ["windowsterminal.exe"]
 
 
-def test_exe_allowed_scope_and_enabled():
+def test_window_allowed_scope_and_enabled():
     s = settings.normalize({"allowlist": ["windowsterminal.exe", "code.exe"]})
-    assert settings.exe_allowed("code.exe", s)
-    assert not settings.exe_allowed("notepad.exe", s)
-    assert not settings.exe_allowed("", s)
+    assert settings.window_allowed("code.exe", "", s)
+    assert not settings.window_allowed("notepad.exe", "", s)
+    assert not settings.window_allowed("", "", s)
     s["scope"] = "all"
-    assert settings.exe_allowed("notepad.exe", s)
-    assert not settings.exe_allowed("", s)
+    assert settings.window_allowed("notepad.exe", "", s)
+    assert not settings.window_allowed("", "", s)
     s["enabled"] = False
-    assert not settings.exe_allowed("code.exe", s)
+    assert not settings.window_allowed("code.exe", "", s)
+
+
+def test_classic_console_matches_by_window_class_not_exe():
+    s = settings.normalize(None)
+    for shell in ("cmd.exe", "powershell.exe", "python.exe"):
+        assert settings.window_allowed(shell, "consolewindowclass", s)
+    assert not settings.window_allowed("notepad.exe", "notepad", s)
+    assert settings.window_allowed("windowsterminal.exe", "cascadia_hosting_window_class", s)
+    assert not settings.window_allowed("", "", s)
+
+
+def test_class_allowlist_cleaning():
+    assert settings.clean_classes([" ConsoleWindowClass ", "x", "X", 5, ""]) == ["consolewindowclass", "x"]
+    assert settings.clean_classes([]) == []  # explicit empty list switches class matching off
+    assert settings.clean_classes("x") == ["consolewindowclass"]

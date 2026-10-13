@@ -26,6 +26,9 @@ LANGUAGES = (("ru", "Russian"), ("en", "English"), ("de", "German"), ("fr", "Fre
 SCOPES = ("terminals", "all")
 PROXY_MODES = ("auto", "direct", "system")
 DEFAULT_ALLOWLIST = ("windowsterminal.exe",)
+# Classic console windows report their SHELL as the owning process (cmd.exe, powershell.exe, ...), so they
+# are matched by window class instead. Measured with tools/probe_host.py.
+DEFAULT_CLASSES = ("consolewindowclass",)
 
 DEFAULTS = {
     "font_px": DEFAULT_FONT_PX,
@@ -34,6 +37,7 @@ DEFAULTS = {
     "enabled": True,
     "proxy_mode": "auto",
     "allowlist": list(DEFAULT_ALLOWLIST),
+    "allowlist_classes": list(DEFAULT_CLASSES),
     "first_run_done": False,
 }
 
@@ -59,6 +63,17 @@ def valid_lang(value) -> str:
     return DEFAULTS["target_lang"]
 
 
+def clean_classes(value) -> list:
+    """Lower-cased, de-duplicated window class names; invalid input falls back to the default, [] is allowed."""
+    if not isinstance(value, list):
+        return list(DEFAULT_CLASSES)
+    out = []
+    for item in value:
+        if isinstance(item, str) and item.strip() and item.strip().lower() not in out:
+            out.append(item.strip().lower())
+    return out
+
+
 def clean_allowlist(value) -> list:
     """Lower-cased, de-duplicated exe names; an empty or invalid list falls back to the default."""
     if not isinstance(value, list):
@@ -76,6 +91,7 @@ def normalize(data) -> dict:
     """Validate a decoded JSON object into a complete settings dict."""
     out = dict(DEFAULTS)
     out["allowlist"] = list(DEFAULT_ALLOWLIST)
+    out["allowlist_classes"] = list(DEFAULT_CLASSES)
     if not isinstance(data, dict):
         return out
     if "font_px" in data:
@@ -88,17 +104,22 @@ def normalize(data) -> dict:
         out["proxy_mode"] = data["proxy_mode"]
     if "allowlist" in data:
         out["allowlist"] = clean_allowlist(data["allowlist"])
+    if "allowlist_classes" in data:
+        out["allowlist_classes"] = clean_classes(data["allowlist_classes"])
     for key in ("enabled", "first_run_done"):
         if isinstance(data.get(key), bool):
             out[key] = data[key]
     return out
 
 
-def exe_allowed(exe: str, settings: dict) -> bool:
-    """Whether a foreground process (lower-case exe name) may trigger the app under these settings."""
-    if not settings.get("enabled", True) or not exe:
+def window_allowed(exe: str, window_class: str, settings: dict) -> bool:
+    """Whether the foreground window (lower-case exe name and class) may trigger the app under these settings."""
+    if not settings.get("enabled", True) or not (exe or window_class):
         return False
-    return settings.get("scope") == "all" or exe in settings.get("allowlist", DEFAULT_ALLOWLIST)
+    if settings.get("scope") == "all":
+        return True
+    return bool(exe and exe in settings.get("allowlist", DEFAULT_ALLOWLIST)) or bool(
+        window_class and window_class in settings.get("allowlist_classes", DEFAULT_CLASSES))
 
 
 def load(path: str = PATH) -> dict:

@@ -88,7 +88,7 @@ class App:
         self.bridge.selection.connect(self.on_selection)
         self.bridge.translated.connect(self.on_translated)
         self.popup.retry_requested.connect(self.on_retry)
-        self.worker = uia.SelectionWorker(self.bridge.selection.emit, self.exe_allowed)
+        self.worker = uia.SelectionWorker(self.bridge.selection.emit, self.window_allowed)
         self.translator = GoogleTranslator(self.settings["proxy_mode"])
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cct-translate")
         self._req_id = 0  # bumped by every new selection and every outside mouse-down; stale results are dropped
@@ -193,8 +193,8 @@ class App:
         except OSError:
             log.warning("could not open the log file")
 
-    def exe_allowed(self, exe: str) -> bool:
-        return settings.exe_allowed(exe, self.settings)
+    def window_allowed(self, exe: str, window_class: str) -> bool:
+        return settings.window_allowed(exe, window_class, self.settings)
 
     def start(self) -> None:
         self.worker.start()
@@ -247,12 +247,12 @@ class App:
         trigger = self.gate.feed(ev)
         if trigger is None:
             return
-        exe = winutil.foreground_exe()
-        if not self.exe_allowed(exe):
-            log.info("trigger ignored, foreground exe %r not allowed (scope=%s, enabled=%s)",
-                     exe, self.settings["scope"], self.settings["enabled"])
+        exe, cls = winutil.foreground_window()
+        if not self.window_allowed(exe, cls):
+            log.info("trigger ignored, foreground exe %r class %r not allowed (scope=%s, enabled=%s)",
+                     exe, cls, self.settings["scope"], self.settings["enabled"])
             return
-        log.info("trigger exe=%s drag=%.0fpx", exe, trigger.drag_px)
+        log.info("trigger exe=%s class=%s drag=%.0fpx", exe, cls, trigger.drag_px)
         self._req_id += 1
         self._trigger_pt = (trigger.x, trigger.y)
         self._text = None

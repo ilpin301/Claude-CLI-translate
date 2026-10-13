@@ -19,7 +19,8 @@ Write the result next to each line (OK / FAIL / note). Send me the FAIL lines an
 
 ## B. Terminal hosts (run `python tools/probe_host.py`, then use the app)
 For each: does the probe print `TextPattern ok` with chars > 0, and does the app show the icon and a translation?
-- [ ] conhost.exe (classic `cmd.exe` window)  - exe name seen in probe: ______
+- [x] conhost / classic console: UIA reads the selection (probe: foreground exe cmd.exe, class ConsoleWindowClass, 2035 chars). Now matched by window class.
+- [ ] conhost end to end with the app: Shift+drag in a classic console window (`conhost.exe cmd.exe` via Win+R) shows the icon and the translation
 - [ ] OpenConsole.exe (if the exe name differs)
 - [ ] VS Code integrated terminal (Code.exe)
 - [ ] Windows Terminal, Claude Code in fullscreen mode
