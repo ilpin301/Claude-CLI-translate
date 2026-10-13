@@ -77,7 +77,7 @@ class FakeSession:
         self.calls = []
 
     def request(self, method, url, params=None, data=None, timeout=None, proxies=None):
-        self.calls.append({"method": method, "params": params, "data": data, "proxies": proxies})
+        self.calls.append({"method": method, "url": url, "params": params, "data": data, "proxies": proxies})
         item = self.script.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -141,11 +141,33 @@ def _clear_sleeps():
     sleeps.clear()
 
 
-def test_429_then_ok_retries_on_the_other_route():
+def test_first_request_goes_to_clients5():
+    tr, s = make([FakeResp()])
+    tr.translate("Hello", "ru")
+    assert s.calls[0]["url"].startswith("https://clients5.google.com/")
+    assert s.calls[0]["params"]["client"] == "dict-chrome-ex" and s.calls[0]["params"]["tl"] == "ru"
+
+
+def test_429_then_ok_falls_back_to_the_gtx_endpoint_on_the_same_route():
     tr, s = make([FakeResp(status=429), FakeResp()])
     assert tr.translate("Hello", "ru").text == "Privet"
-    assert [c["proxies"] for c in s.calls] == [None, {"http": PROXY, "https": PROXY}]
+    assert [c["url"].split("/")[2] for c in s.calls] == ["clients5.google.com", "translate.googleapis.com"]
+    assert [c["proxies"] for c in s.calls] == [None, None]
     assert sleeps == [translate.BACKOFF_S[0]]
+
+
+def test_429_on_every_endpoint_moves_to_the_other_route():
+    tr, s = make([FakeResp(status=429), FakeResp(status=429), FakeResp()])
+    assert tr.translate("Hello", "ru").text == "Privet"
+    assert [c["proxies"] for c in s.calls] == [None, None, {"http": PROXY, "https": PROXY}]
+    assert s.calls[2]["url"].startswith("https://clients5.google.com/")
+
+
+def test_parse_response_clients5_layout():
+    assert parse_response([["Привет, мир", "en"]]) == ("Привет, мир", "en")
+    assert parse_response([["a\nb\n\nc", "ru"]]) == ("a\nb\n\nc", "ru")
+    assert parse_response([["x"]]) == ("x", "")
+    assert parse_response([["a", "en"], ["b", "en"]]) == ("ab", "en")
 
 
 def test_429_without_proxy_retries_same_route_with_backoff():

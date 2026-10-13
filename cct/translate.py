@@ -17,7 +17,14 @@ from . import config
 
 log = logging.getLogger("cct.translate")
 
-ENDPOINT = "https://translate.googleapis.com/translate_a/single"
+# (name, url, fixed params). Tried in this order; a 429 moves on to the next one. clients5/dict-chrome-ex
+# (the Chrome dictionary extension endpoint) answered 200 where the gtx endpoint returned 429 for the
+# same IP (measured with tools/probe_translate.py), so it is first.
+ENDPOINTS = (
+    ("clients5", "https://clients5.google.com/translate_a/t", {"client": "dict-chrome-ex", "sl": "auto"}),
+    ("gtx", "https://translate.googleapis.com/translate_a/single",
+     {"client": "gtx", "sl": "auto", "dt": "t"}),
+)
 POST_THRESHOLD = 1500
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -56,8 +63,16 @@ def same_language(detected: str, target: str) -> bool:
 
 
 def parse_response(data) -> tuple:
-    """gtx JSON [[[seg, orig, ...], ...], None, 'xx', ...] -> (translated_text, detected_lang)."""
+    """Response JSON -> (translated_text, detected_lang).
+
+    Two layouts: clients5 `[["translation", "xx"]]` and gtx `[[[seg, orig, ...], ...], None, "xx", ...]`.
+    """
     try:
+        if isinstance(data, list) and data and isinstance(data[0], list) and data[0] \
+                and isinstance(data[0][0], str):
+            rows = [row for row in data if isinstance(row, list) and row and isinstance(row[0], str)]
+            detected = rows[0][1] if len(rows[0]) > 1 and isinstance(rows[0][1], str) else ""
+            return "".join(row[0] for row in rows), detected
         items, detected = data[0], data[2]
         if not isinstance(items, list) or not isinstance(detected, str):
             raise TypeError("unexpected layout")
@@ -156,15 +171,16 @@ class GoogleTranslator(Translator):
             while len(self._cache) > self.cache_size:
                 self._cache.popitem(last=False)
 
-    def _request(self, session, text: str, target: str, proxy: Optional[str]):
-        params = {"client": "gtx", "sl": "auto", "tl": target, "dt": "t"}
+    def _request(self, session, text: str, target: str, proxy: Optional[str], endpoint=ENDPOINTS[0]):
+        _name, url, fixed = endpoint
+        params = dict(fixed, tl=target)
         proxies = {"http": proxy, "https": proxy} if proxy else None
         timeout = (config.CONNECT_TIMEOUT_S, config.READ_TIMEOUT_S)
         if len(text) > POST_THRESHOLD:
-            return session.request("POST", ENDPOINT, params=params, data={"q": text},
+            return session.request("POST", url, params=params, data={"q": text},
                                    timeout=timeout, proxies=proxies)
         params["q"] = text
-        return session.request("GET", ENDPOINT, params=params, timeout=timeout, proxies=proxies)
+        return session.request("GET", url, params=params, timeout=timeout, proxies=proxies)
 
     def translate(self, text: str, target: str) -> TranslationResult:
         key = (text, target)
@@ -177,16 +193,18 @@ class GoogleTranslator(Translator):
         session = self._session_factory()
         started = time.monotonic()
         route = 0
+        ep = 0
         net_failures = 0
         resp = None
         for try_no in range(1, MAX_TRIES + 1):
             proxy = routes[route]
             via = "proxy" if proxy else "direct"
+            ep_name = ENDPOINTS[ep][0]
             try:
-                resp = self._request(session, text, target, proxy)
+                resp = self._request(session, text, target, proxy, ENDPOINTS[ep])
             except (requests.ConnectionError, requests.Timeout) as exc:
                 net_failures += 1
-                log.warning("translate %s try=%d via=%s network error %s", tag, try_no, via, type(exc).__name__)
+                log.warning("translate %s try=%d via=%s ep=%s network error %s", tag, try_no, via, ep_name, type(exc).__name__)
                 if net_failures >= len(routes):  # every route failed once: give up
                     raise TranslateError(
                         "Cannot reach the translation service (%s). Check the connection or proxy."
@@ -194,11 +212,11 @@ class GoogleTranslator(Translator):
                 route = (route + 1) % len(routes)
                 continue
             except requests.RequestException as exc:
-                log.warning("translate %s try=%d via=%s request error %s", tag, try_no, via, type(exc).__name__)
+                log.warning("translate %s try=%d via=%s ep=%s request error %s", tag, try_no, via, ep_name, type(exc).__name__)
                 raise TranslateError("Translation request failed (%s)." % type(exc).__name__) from exc
             if resp.status_code == 200:
                 break
-            log.warning("translate %s try=%d via=%s http=%s", tag, try_no, via, resp.status_code)
+            log.warning("translate %s try=%d via=%s ep=%s http=%s", tag, try_no, via, ep_name, resp.status_code)
             if resp.status_code not in RETRY_STATUSES:
                 raise TranslateError("Translation service returned HTTP %s." % resp.status_code,
                                      retryable=False)
@@ -209,8 +227,10 @@ class GoogleTranslator(Translator):
                 raise TranslateError("Translation service returned HTTP %s." % resp.status_code)
             headers = getattr(resp, "headers", None) or {}
             self._sleep(retry_delay(try_no, headers.get("Retry-After")))
-            if resp.status_code == 429:  # rate limits are per route/IP: prefer the other route if there is one
-                route = (route + 1) % len(routes)
+            if resp.status_code == 429:  # try the other endpoint; once all were tried, the other route
+                ep = (ep + 1) % len(ENDPOINTS)
+                if ep == 0:
+                    route = (route + 1) % len(routes)
         else:  # only reachable when the last try was a network error that did not raise
             raise TranslateError("Cannot reach the translation service. Check the connection or proxy.")
         try:
@@ -219,7 +239,7 @@ class GoogleTranslator(Translator):
             raise TranslateError("Translation service returned invalid data.") from exc
         translated, detected = parse_response(payload)
         result = TranslationResult(translated, detected, same_language(detected, target))
-        log.info("translate ok %s tries=%d via=%s ms=%d detected=%s", tag, try_no, via,
+        log.info("translate ok %s tries=%d via=%s ep=%s ms=%d detected=%s", tag, try_no, via, ep_name,
                  (time.monotonic() - started) * 1000, detected)
         self._cache_put(key, result)
         return result
