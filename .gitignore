@@ -1,0 +1,6 @@
+spike/
+*.log
+*.jsonl
+*.stop
+__pycache__/
+.pytest_cache/
