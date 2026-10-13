@@ -244,3 +244,10 @@ def test_cache_keyed_by_target_and_evicts_lru():
 
 def test_module_exports_no_qt():
     assert not hasattr(translate, "QObject")
+
+
+def test_session_sends_browser_user_agent():
+    session = GoogleTranslator._new_session()
+    assert "python-requests" not in session.headers["User-Agent"]
+    assert session.headers["User-Agent"] == translate.USER_AGENT
+    assert session.trust_env is False

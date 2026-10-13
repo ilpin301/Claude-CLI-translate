@@ -19,6 +19,8 @@ log = logging.getLogger("cct.translate")
 
 ENDPOINT = "https://translate.googleapis.com/translate_a/single"
 POST_THRESHOLD = 1500
+USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 MAX_TRIES = 3  # total HTTP attempts per translate() call, across routes
 BACKOFF_S = (0.8, 2.0)  # sleep before the 2nd and 3rd try when the server sent no Retry-After
@@ -137,6 +139,7 @@ class GoogleTranslator(Translator):
     def _new_session():
         session = requests.Session()
         session.trust_env = False  # proxy choice is explicit, never from env vars
+        session.headers["User-Agent"] = USER_AGENT  # the default python-requests UA is throttled more readily
         return session
 
     def _cache_get(self, key):
