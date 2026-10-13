@@ -1,6 +1,6 @@
-"""Static defaults for phase P1 (the JSON config file arrives in P3)."""
+"""Static constants. User-changeable options (language, scope, allowlist, proxy_mode, ...) live in cct.settings."""
 
-ALLOWLIST = frozenset({"windowsterminal.exe"})  # lower-case process exe names
+ALLOWLIST = frozenset({"windowsterminal.exe"})  # fallback only; the live allowlist is in settings.json
 REQUIRE_SHIFT = True
 MIN_DRAG_PX = 4
 ICON_SIZE = 40  # logical px at 100% DPI

@@ -2,26 +2,26 @@ from cct import settings
 
 
 def test_defaults_when_missing(tmp_path):
-    assert settings.load(str(tmp_path / "s.json")) == {"font_px": settings.DEFAULT_FONT_PX}
+    assert settings.load(str(tmp_path / "s.json")) == settings.normalize(None)
 
 
 def test_roundtrip_leaves_no_temp_file(tmp_path):
     p = str(tmp_path / "s.json")
     settings.save({"font_px": 23}, p)
-    assert settings.load(p) == {"font_px": 23}
+    assert settings.load(p)["font_px"] == 23
     assert not [f for f in tmp_path.iterdir() if f.suffix == ".tmp"]
 
 
 def test_corrupt_file_falls_back(tmp_path):
     p = tmp_path / "s.json"
     p.write_text("{not json", encoding="utf-8")
-    assert settings.load(str(p)) == {"font_px": settings.DEFAULT_FONT_PX}
+    assert settings.load(str(p)) == settings.normalize(None)
 
 
 def test_wrong_shape_falls_back(tmp_path):
     p = tmp_path / "s.json"
     p.write_text("[1, 2]", encoding="utf-8")
-    assert settings.load(str(p)) == {"font_px": settings.DEFAULT_FONT_PX}
+    assert settings.load(str(p)) == settings.normalize(None)
 
 
 def test_loaded_value_snaps_to_an_offered_size(tmp_path):
@@ -43,3 +43,65 @@ def test_save_creates_missing_folder(tmp_path):
     p = tmp_path / "new" / "s.json"
     settings.save({"font_px": 19}, str(p))
     assert p.exists()
+
+
+def test_defaults_are_complete_and_independent():
+    a, b = settings.normalize(None), settings.normalize(None)
+    assert a == settings.DEFAULTS | {"allowlist": ["windowsterminal.exe"],
+                                     "allowlist_classes": ["consolewindowclass"]}
+    a["allowlist"].append("x.exe")
+    assert b["allowlist"] == ["windowsterminal.exe"]
+
+
+def test_full_roundtrip(tmp_path):
+    p = str(tmp_path / "s.json")
+    custom = {"font_px": 19, "target_lang": "de", "scope": "all", "enabled": False,
+              "proxy_mode": "system", "allowlist": ["wt.exe", "code.exe"],
+              "allowlist_classes": ["consolewindowclass", "myclass"], "first_run_done": True}
+    settings.save(custom, p)
+    assert settings.load(p) == custom
+
+
+def test_invalid_values_fall_back_per_key():
+    got = settings.normalize({"target_lang": "xx", "scope": "bogus", "proxy_mode": 5,
+                              "enabled": "yes", "first_run_done": 1, "font_px": 16})
+    assert got == settings.normalize(None)
+
+
+def test_language_is_case_insensitive_and_canonical():
+    assert settings.valid_lang("ZH-cn") == "zh-CN"
+    assert settings.valid_lang("DE") == "de"
+    assert settings.valid_lang(None) == "ru"
+
+
+def test_allowlist_cleaning():
+    assert settings.clean_allowlist(["C:\\Apps\\Code.EXE", " wt.exe ", "wt.exe", "", 3]) == ["code.exe", "wt.exe"]
+    assert settings.clean_allowlist([]) == ["windowsterminal.exe"]
+    assert settings.clean_allowlist("code.exe") == ["windowsterminal.exe"]
+
+
+def test_window_allowed_scope_and_enabled():
+    s = settings.normalize({"allowlist": ["windowsterminal.exe", "code.exe"]})
+    assert settings.window_allowed("code.exe", "", s)
+    assert not settings.window_allowed("notepad.exe", "", s)
+    assert not settings.window_allowed("", "", s)
+    s["scope"] = "all"
+    assert settings.window_allowed("notepad.exe", "", s)
+    assert not settings.window_allowed("", "", s)
+    s["enabled"] = False
+    assert not settings.window_allowed("code.exe", "", s)
+
+
+def test_classic_console_matches_by_window_class_not_exe():
+    s = settings.normalize(None)
+    for shell in ("cmd.exe", "powershell.exe", "python.exe"):
+        assert settings.window_allowed(shell, "consolewindowclass", s)
+    assert not settings.window_allowed("notepad.exe", "notepad", s)
+    assert settings.window_allowed("windowsterminal.exe", "cascadia_hosting_window_class", s)
+    assert not settings.window_allowed("", "", s)
+
+
+def test_class_allowlist_cleaning():
+    assert settings.clean_classes([" ConsoleWindowClass ", "x", "X", 5, ""]) == ["consolewindowclass", "x"]
+    assert settings.clean_classes([]) == []  # explicit empty list switches class matching off
+    assert settings.clean_classes("x") == ["consolewindowclass"]

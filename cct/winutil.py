@@ -16,6 +16,8 @@ user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
 user32.MonitorFromPoint.restype = wintypes.HMONITOR
 user32.GetMonitorInfoW.argtypes = [wintypes.HMONITOR, ctypes.c_void_p]
 user32.GetMonitorInfoW.restype = wintypes.BOOL
+user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+user32.GetClassNameW.restype = ctypes.c_int
 user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 user32.GetWindowRect.restype = wintypes.BOOL
 kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
@@ -68,6 +70,22 @@ def window_exe(hwnd) -> str:
 
 def foreground_exe() -> str:
     return window_exe(user32.GetForegroundWindow())
+
+
+def window_class(hwnd) -> str:
+    """Lower-case window class name, or '' if unknown."""
+    if not hwnd:
+        return ""
+    buf = ctypes.create_unicode_buffer(256)
+    if user32.GetClassNameW(hwnd, buf, 256):
+        return buf.value.lower()
+    return ""
+
+
+def foreground_window():
+    """(exe, window class), both lower-case, of the foreground window."""
+    hwnd = user32.GetForegroundWindow()
+    return window_exe(hwnd), window_class(hwnd)
 
 
 def window_rect(hwnd):

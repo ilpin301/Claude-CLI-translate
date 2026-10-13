@@ -7,7 +7,7 @@ Same window flags / extended styles as icon.py (helpers imported from there). Co
 physical pixels; the only physical -> Qt logical conversion is the size computed in _place().
 The copy button is the only clipboard write in the app and happens only on an explicit click.
 """
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout,
                                QWidget)
@@ -23,6 +23,8 @@ _BTN_CSS = ("QPushButton{color:#ddd;background:#333;border:none;border-radius:4p
 
 
 class PopupWindow(QWidget):
+    retry_requested = Signal()
+
     def __init__(self, font_px: int = settings.DEFAULT_FONT_PX):
         super().__init__(
             None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
@@ -38,16 +40,19 @@ class PopupWindow(QWidget):
         self._header = QLabel()
         self._header.setStyleSheet("color:#9aa0a6;")
         self._copy = QPushButton("Copy")
+        self._retry = QPushButton("Retry")
         self._close = QPushButton("✕")
-        for btn in (self._copy, self._close):
+        for btn in (self._copy, self._retry, self._close):
             btn.setFocusPolicy(Qt.NoFocus)
             btn.setStyleSheet(_BTN_CSS)
             btn.setCursor(Qt.PointingHandCursor)
         self._copy.clicked.connect(self._on_copy)
+        self._retry.clicked.connect(self.retry_requested.emit)
         self._close.clicked.connect(self.hide_popup)
         top = QHBoxLayout()
         top.addWidget(self._header, 1)
         top.addWidget(self._copy)
+        top.addWidget(self._retry)
         top.addWidget(self._close)
 
         self._body = QLabel()
@@ -95,19 +100,19 @@ class PopupWindow(QWidget):
         self._translation = ""
         self._set_content("auto → %s" % target, "Translating…", "", copy=False)
 
-    def show_result(self, result, truncated: bool) -> None:
+    def show_result(self, result, truncated: bool, target: str) -> None:
         notes = []
         if result.same_lang:
             notes.append("Source and target language are the same.")
         if truncated:
             notes.append("Text was truncated to %d characters." % config.MAX_CHARS)
         self._translation = result.text
-        self._set_content("%s → %s" % (result.detected_lang or "auto", config.TARGET_LANG),
+        self._set_content("%s → %s" % (result.detected_lang or "auto", target),
                           result.text, " ".join(notes), copy=True)
 
-    def show_error(self, msg: str) -> None:
+    def show_error(self, msg: str, retry: bool = False) -> None:
         self._translation = ""
-        self._set_content("Translation failed", msg, "", copy=False)
+        self._set_content("Translation failed", msg, "", copy=False, retry=retry)
 
     def hide_popup(self) -> None:
         self._copy_timer.stop()
@@ -129,9 +134,10 @@ class PopupWindow(QWidget):
         user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW)
         self._styled = True
 
-    def _set_content(self, header: str, body: str, note: str, copy: bool) -> None:
+    def _set_content(self, header: str, body: str, note: str, copy: bool, retry: bool = False) -> None:
         self._header.setText(header)
         self._copy.setVisible(copy)
+        self._retry.setVisible(retry)
         self._copy.setText("Copy")
         self._note.setText(note)
         self._note.setVisible(bool(note))

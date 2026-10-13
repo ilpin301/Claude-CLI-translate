@@ -20,7 +20,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import config, settings, winutil
+from . import autostart, config, settings, singleton, winutil
 from .gating import WM_LBUTTONDOWN, WM_LBUTTONUP, Gate
 from .icon import IconWindow
 from .normalize import normalize
@@ -72,7 +72,7 @@ def _tray_pixmap() -> QPixmap:
 class Bridge(QObject):
     """Carries results from worker threads to the GUI thread (queued signal delivery)."""
     selection = Signal(int, object)  # request id, text or None
-    translated = Signal(int, object, str)  # request id, TranslationResult or None, error message
+    translated = Signal(int, object, str, bool)  # request id, TranslationResult or None, error message, retryable
 
 
 class App:
@@ -87,13 +87,15 @@ class App:
         self.bridge = Bridge()
         self.bridge.selection.connect(self.on_selection)
         self.bridge.translated.connect(self.on_translated)
-        self.worker = uia.SelectionWorker(self.bridge.selection.emit)
-        self.translator = GoogleTranslator(config.PROXY_MODE)
+        self.popup.retry_requested.connect(self.on_retry)
+        self.worker = uia.SelectionWorker(self.bridge.selection.emit, self.window_allowed)
+        self.translator = GoogleTranslator(self.settings["proxy_mode"])
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cct-translate")
         self._req_id = 0  # bumped by every new selection and every outside mouse-down; stale results are dropped
         self._trigger_pt = (0, 0)
         self._text = None
         self._truncated = False
+        self._result_lang = self.settings["target_lang"]
         self._ignore_up = False
         self._last_cursor = winutil.cursor_pos()
         self._last_count = 0
@@ -109,22 +111,90 @@ class App:
         self.tray = QSystemTrayIcon(QIcon(_tray_pixmap()))
         self.tray.setToolTip("Claude CLI Translate - hold Shift while dragging to select")
         menu = QMenu()
+        self._enable_action = QAction("Enabled", menu)
+        self._enable_action.setCheckable(True)
+        self._enable_action.setChecked(self.settings["enabled"])
+        self._enable_action.toggled.connect(self.set_enabled)
+        menu.addAction(self._enable_action)
+        lang_menu = menu.addMenu("Target language")
+        self._lang_group = self._radio_menu(
+            lang_menu, [(code, "%s (%s)" % (name, code)) for code, name in settings.LANGUAGES],
+            self.settings["target_lang"], self.set_target_lang)
+        scope_menu = menu.addMenu("Scope")
+        self._scope_group = self._radio_menu(
+            scope_menu, [("terminals", "Terminals only (allowlist)"), ("all", "All applications")],
+            self.settings["scope"], self.set_scope)
         font_menu = menu.addMenu("Font size")
-        self._font_group = QActionGroup(font_menu)
-        self._font_group.setExclusive(True)
-        for px, label in settings.FONT_SIZES:
-            action = QAction("%s (%d px)" % (label, px), font_menu)
-            action.setCheckable(True)
-            action.setChecked(px == self.settings["font_px"])
-            action.triggered.connect(lambda _checked=False, value=px: self.set_font(value))
-            self._font_group.addAction(action)
-            font_menu.addAction(action)
+        self._font_group = self._radio_menu(
+            font_menu, [(px, "%s (%d px)" % (label, px)) for px, label in settings.FONT_SIZES],
+            self.settings["font_px"], self.set_font)
+        self._autostart_action = QAction("Start with Windows", menu)
+        self._autostart_action.setCheckable(True)
+        self._autostart_action.setChecked(autostart.is_enabled())
+        self._autostart_action.toggled.connect(self.set_autostart)
+        menu.addAction(self._autostart_action)
         menu.addSeparator()
+        log_action = QAction("Open log", menu)
+        log_action.triggered.connect(self.open_log)
+        menu.addAction(log_action)
         quit_action = QAction("Quit", menu)
         quit_action.triggered.connect(self.quit)
         menu.addAction(quit_action)
         self.tray.setContextMenu(menu)
         self._menu = menu
+
+    @staticmethod
+    def _radio_menu(menu, entries, current, callback):
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        for value, label in entries:
+            action = QAction(label, menu)
+            action.setCheckable(True)
+            action.setChecked(value == current)
+            action.triggered.connect(lambda _checked=False, v=value: callback(v))
+            group.addAction(action)
+            menu.addAction(action)
+        return group
+
+    def _save(self) -> None:
+        settings.save(self.settings)
+
+    def set_enabled(self, enabled: bool) -> None:
+        self.settings["enabled"] = bool(enabled)
+        self._req_id += 1  # drop any pending read / translation
+        self.icon.hide_icon()
+        if not enabled:
+            self.popup.hide_popup()
+        self._save()
+        log.info("enabled=%s", enabled)
+
+    def set_target_lang(self, code: str) -> None:
+        self.settings["target_lang"] = settings.valid_lang(code)
+        self._save()
+        log.info("target language set to %s", self.settings["target_lang"])
+
+    def set_scope(self, scope: str) -> None:
+        self.settings["scope"] = scope if scope in settings.SCOPES else "terminals"
+        self._save()
+        log.info("scope set to %s", self.settings["scope"])
+
+    def set_autostart(self, enabled: bool) -> None:
+        if not autostart.set_enabled(bool(enabled)):
+            actual = autostart.is_enabled()  # registry write failed: show the real state again
+            self._autostart_action.blockSignals(True)
+            self._autostart_action.setChecked(actual)
+            self._autostart_action.blockSignals(False)
+            self.tray.showMessage("Claude CLI Translate", "Could not change the start-up setting.")
+
+    def open_log(self) -> None:
+        path = os.path.join(LOG_DIR, "cct.log")
+        try:
+            os.startfile(path)  # noqa: S606  (Windows only; opens in the default editor)
+        except OSError:
+            log.warning("could not open the log file")
+
+    def window_allowed(self, exe: str, window_class: str) -> bool:
+        return settings.window_allowed(exe, window_class, self.settings)
 
     def start(self) -> None:
         self.worker.start()
@@ -132,8 +202,14 @@ class App:
         self.poll.start()
         self.watchdog.start()
         self.tray.show()
-        self.tray.showMessage("Claude CLI Translate", "Running. Hold Shift while dragging to select text.")
-        log.info("started; allowlist=%s require_shift=%s", sorted(config.ALLOWLIST), config.REQUIRE_SHIFT)
+        if not self.settings["first_run_done"]:
+            self.tray.showMessage("Claude CLI Translate",
+                                  "Hold Shift while dragging to select text, then click the icon to translate.")
+            self.settings["first_run_done"] = True
+            settings.save(self.settings)
+        log.info("started; scope=%s allowlist=%s lang=%s proxy_mode=%s enabled=%s", self.settings["scope"],
+                 self.settings["allowlist"], self.settings["target_lang"], self.settings["proxy_mode"],
+                 self.settings["enabled"])
 
     def quit(self) -> None:
         log.info("quit requested")
@@ -171,11 +247,12 @@ class App:
         trigger = self.gate.feed(ev)
         if trigger is None:
             return
-        exe = winutil.foreground_exe()
-        if exe not in config.ALLOWLIST:
-            log.info("trigger ignored, foreground exe %r not allowlisted", exe)
+        exe, cls = winutil.foreground_window()
+        if not self.window_allowed(exe, cls):
+            log.info("trigger ignored, foreground exe %r class %r not allowed (scope=%s, enabled=%s)",
+                     exe, cls, self.settings["scope"], self.settings["enabled"])
             return
-        log.info("trigger exe=%s drag=%.0fpx", exe, trigger.drag_px)
+        log.info("trigger exe=%s class=%s drag=%.0fpx", exe, cls, trigger.drag_px)
         self._req_id += 1
         self._trigger_pt = (trigger.x, trigger.y)
         self._text = None
@@ -198,28 +275,36 @@ class App:
         self.icon.hide_icon()
         if not self._text:
             return
-        self.popup.show_loading(*self._trigger_pt, config.TARGET_LANG)
-        self.executor.submit(self._translate, self._req_id, self._text)
+        self._result_lang = self.settings["target_lang"]
+        self.popup.show_loading(*self._trigger_pt, self._result_lang)
+        self.executor.submit(self._translate, self._req_id, self._text, self._result_lang)
 
-    def _translate(self, req_id: int, text: str) -> None:  # runs on the translate thread
+    def on_retry(self) -> None:
+        if not self._text or not self.popup.isVisible():
+            return
+        log.info("retry clicked")
+        self.popup.show_loading(*self._trigger_pt, self._result_lang)
+        self.executor.submit(self._translate, self._req_id, self._text, self._result_lang)
+
+    def _translate(self, req_id: int, text: str, lang: str) -> None:  # runs on the translate thread
         try:
-            result = self.translator.translate(text, config.TARGET_LANG)
+            result = self.translator.translate(text, lang)
         except TranslateError as exc:
-            self.bridge.translated.emit(req_id, None, str(exc))
+            self.bridge.translated.emit(req_id, None, str(exc), exc.retryable)
             return
         except Exception:
             log.exception("translate failed")
-            self.bridge.translated.emit(req_id, None, "Unexpected translation error (see log).")
+            self.bridge.translated.emit(req_id, None, "Unexpected translation error (see log).", True)
             return
-        self.bridge.translated.emit(req_id, result, "")
+        self.bridge.translated.emit(req_id, result, "", False)
 
-    def on_translated(self, req_id: int, result, error: str) -> None:
+    def on_translated(self, req_id: int, result, error: str, retryable: bool) -> None:
         if req_id != self._req_id or not self.popup.isVisible():
             return
         if result is None:
-            self.popup.show_error(error)
+            self.popup.show_error(error, retryable)
         else:
-            self.popup.show_result(result, self._truncated)
+            self.popup.show_result(result, self._truncated, self._result_lang)
 
     def set_font(self, px: int) -> None:
         px = settings.clamp_font(px)
@@ -243,6 +328,8 @@ class App:
 
 
 def main() -> None:
+    if not singleton.acquire():
+        return  # another instance is already running in this session
     setup_logging()
     qapp = QApplication(sys.argv)
     qapp.setQuitOnLastWindowClosed(False)
