@@ -1,18 +1,31 @@
-"""Phase P1 app: mouse hook + Shift gating + icon + minimal tray. Selection read/translation come later."""
+"""Phase P2 app: mouse hook + Shift gating -> UIA read -> normalise -> icon -> click -> translate -> popup.
+
+Flow: a Shift+drag trigger in an allowlisted window asks the UIA worker (cct.uia) for the selection;
+a non-empty result is normalised and the icon appears. Nothing is translated or sent until the icon
+is clicked; then the stored text is translated on a single worker thread and the popup shows the
+result. Worker threads reach the GUI thread only through Qt signals. A mouse-down outside the popup
+(and not on the icon) closes it, a new selection closes it, a mouse-down inside it is not a selection.
+"""
+from . import uia  # noqa: F401  (must come first: sets sys.coinit_flags = 0 before PySide6/comtypes)
+
 import faulthandler
 import logging
 import logging.handlers
 import os
 import queue
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import config, winutil
 from .gating import WM_LBUTTONDOWN, WM_LBUTTONUP, Gate
 from .icon import IconWindow
+from .normalize import normalize
+from .popup import PopupWindow
+from .translate import GoogleTranslator, TranslateError
 from .winhook import MouseHook
 
 log = logging.getLogger("cct")
@@ -44,6 +57,12 @@ def _tray_pixmap() -> QPixmap:
     return pixmap
 
 
+class Bridge(QObject):
+    """Carries results from worker threads to the GUI thread (queued signal delivery)."""
+    selection = Signal(int, object)  # request id, text or None
+    translated = Signal(int, object, str)  # request id, TranslationResult or None, error message
+
+
 class App:
     def __init__(self, qapp: QApplication):
         self.qapp = qapp
@@ -51,6 +70,17 @@ class App:
         self.hook = MouseHook()
         self.icon = IconWindow()
         self.icon.clicked.connect(self.on_icon_clicked)
+        self.popup = PopupWindow()
+        self.bridge = Bridge()
+        self.bridge.selection.connect(self.on_selection)
+        self.bridge.translated.connect(self.on_translated)
+        self.worker = uia.SelectionWorker(self.bridge.selection.emit)
+        self.translator = GoogleTranslator(config.PROXY_MODE)
+        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cct-translate")
+        self._req_id = 0  # bumped by every new selection and every outside mouse-down; stale results are dropped
+        self._trigger_pt = (0, 0)
+        self._text = None
+        self._truncated = False
         self._ignore_up = False
         self._last_cursor = winutil.cursor_pos()
         self._last_count = 0
@@ -73,6 +103,7 @@ class App:
         self._menu = menu
 
     def start(self) -> None:
+        self.worker.start()
         self.hook.start()
         self.poll.start()
         self.watchdog.start()
@@ -85,6 +116,9 @@ class App:
         self.poll.stop()
         self.watchdog.stop()
         self.icon.hide_icon()
+        self.popup.hide_popup()
+        self.worker.stop()
+        self.executor.shutdown(wait=False, cancel_futures=True)
         self.hook.stop()
         self.tray.hide()
         self.qapp.quit()
@@ -100,11 +134,13 @@ class App:
     def handle(self, ev) -> None:
         msg, x, y, _tick, _shift = ev
         if msg == WM_LBUTTONDOWN:
-            if self.icon.contains_physical(x, y):
-                self._ignore_up = True  # the icon handles its own click
+            if self.popup.contains_physical(x, y) or self.icon.contains_physical(x, y):
+                self._ignore_up = True  # the popup / icon handle their own clicks
                 return
             self._ignore_up = False
+            self._req_id += 1  # invalidates any pending read or translation
             self.icon.hide_icon()
+            self.popup.hide_popup()
         elif msg == WM_LBUTTONUP and self._ignore_up:
             self._ignore_up = False
             self.gate.reset()
@@ -117,12 +153,49 @@ class App:
             log.info("trigger ignored, foreground exe %r not allowlisted", exe)
             return
         log.info("trigger exe=%s drag=%.0fpx", exe, trigger.drag_px)
-        self.icon.show_near(trigger.x, trigger.y)
+        self._req_id += 1
+        self._trigger_pt = (trigger.x, trigger.y)
+        self._text = None
+        self.worker.request(self._req_id)
+
+    def on_selection(self, req_id: int, text) -> None:
+        if req_id != self._req_id:
+            return
+        norm, truncated = normalize(text or "", config.MAX_CHARS)
+        if not norm:
+            log.info("no usable selection (raw len=%d)", len(text or ""))
+            return
+        self._text, self._truncated = norm, truncated
+        log.info("selection ready len=%d truncated=%s", len(norm), truncated)
+        self.icon.show_near(*self._trigger_pt)
 
     def on_icon_clicked(self) -> None:
         log.info("icon clicked")
         self.icon.hide_icon()
-        self.tray.showMessage("Claude CLI Translate", "Icon clicked (phase 1 placeholder: no translation yet).")
+        if not self._text:
+            return
+        self.popup.show_loading(*self._trigger_pt, config.TARGET_LANG)
+        self.executor.submit(self._translate, self._req_id, self._text)
+
+    def _translate(self, req_id: int, text: str) -> None:  # runs on the translate thread
+        try:
+            result = self.translator.translate(text, config.TARGET_LANG)
+        except TranslateError as exc:
+            self.bridge.translated.emit(req_id, None, str(exc))
+            return
+        except Exception:
+            log.exception("translate failed")
+            self.bridge.translated.emit(req_id, None, "Unexpected translation error (see log).")
+            return
+        self.bridge.translated.emit(req_id, result, "")
+
+    def on_translated(self, req_id: int, result, error: str) -> None:
+        if req_id != self._req_id or not self.popup.isVisible():
+            return
+        if result is None:
+            self.popup.show_error(error)
+        else:
+            self.popup.show_result(result, self._truncated)
 
     def check_hook(self) -> None:
         cursor = winutil.cursor_pos()
