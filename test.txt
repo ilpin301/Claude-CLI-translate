@@ -1,0 +1,1 @@
+claude --cloud "Smoke test. Do not modify or commit anything. Run uname -a and pwd, then reply with both outputs."
