@@ -19,10 +19,18 @@ log = logging.getLogger("cct.translate")
 
 ENDPOINT = "https://translate.googleapis.com/translate_a/single"
 POST_THRESHOLD = 1500
+RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+MAX_TRIES = 3  # total HTTP attempts per translate() call, across routes
+BACKOFF_S = (0.8, 2.0)  # sleep before the 2nd and 3rd try when the server sent no Retry-After
+RETRY_AFTER_CAP_S = 5.0
 
 
 class TranslateError(Exception):
-    """Readable, user-facing translation failure."""
+    """Readable, user-facing translation failure. retryable: a manual Retry in the popup may help."""
+
+    def __init__(self, message: str, retryable: bool = True):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 @dataclass(frozen=True)
@@ -92,11 +100,22 @@ def plan_attempts(proxy_mode: str, system_proxies: Dict[str, str]) -> List[Optio
         return [None]
     if proxy_mode == "system":
         if proxy is None:
-            raise TranslateError("proxy_mode is 'system' but no system SOCKS proxy is configured.")
+            raise TranslateError("proxy_mode is 'system' but no system SOCKS proxy is configured.", retryable=False)
         return [proxy]
     if proxy_mode == "auto":
         return [None, proxy] if proxy else [None]
-    raise TranslateError("Unknown proxy_mode %r." % proxy_mode)
+    raise TranslateError("Unknown proxy_mode %r." % proxy_mode, retryable=False)
+
+
+def retry_delay(try_no: int, retry_after) -> float:
+    """Seconds to wait before try number try_no + 1 (try_no is 1-based). Honours a numeric Retry-After header."""
+    try:
+        wanted = float(retry_after)
+    except (TypeError, ValueError):
+        wanted = None
+    if wanted is not None and wanted >= 0:
+        return min(wanted, RETRY_AFTER_CAP_S)
+    return BACKOFF_S[min(try_no, len(BACKOFF_S)) - 1]
 
 
 def _fingerprint(text: str) -> str:
@@ -105,7 +124,8 @@ def _fingerprint(text: str) -> str:
 
 class GoogleTranslator(Translator):
     def __init__(self, proxy_mode: str = "auto", cache_size: int = config.CACHE_SIZE,
-                 session_factory=None, proxies_provider=None):
+                 session_factory=None, proxies_provider=None, sleep=time.sleep):
+        self._sleep = sleep
         self.proxy_mode = proxy_mode
         self.cache_size = cache_size
         self._session_factory = session_factory or self._new_session
@@ -150,34 +170,53 @@ class GoogleTranslator(Translator):
         if cached is not None:
             log.info("translate cache hit %s", tag)
             return cached
-        attempts = plan_attempts(self.proxy_mode, self._proxies_provider())
+        routes = plan_attempts(self.proxy_mode, self._proxies_provider())
         session = self._session_factory()
         started = time.monotonic()
+        route = 0
+        net_failures = 0
         resp = None
-        for i, proxy in enumerate(attempts):
+        for try_no in range(1, MAX_TRIES + 1):
+            proxy = routes[route]
             via = "proxy" if proxy else "direct"
             try:
                 resp = self._request(session, text, target, proxy)
-                break
             except (requests.ConnectionError, requests.Timeout) as exc:
-                log.warning("translate %s via=%s network error %s", tag, via, type(exc).__name__)
-                if i == len(attempts) - 1:
+                net_failures += 1
+                log.warning("translate %s try=%d via=%s network error %s", tag, try_no, via, type(exc).__name__)
+                if net_failures >= len(routes):  # every route failed once: give up
                     raise TranslateError(
                         "Cannot reach the translation service (%s). Check the connection or proxy."
                         % type(exc).__name__) from exc
+                route = (route + 1) % len(routes)
+                continue
             except requests.RequestException as exc:
-                log.warning("translate %s via=%s request error %s", tag, via, type(exc).__name__)
+                log.warning("translate %s try=%d via=%s request error %s", tag, try_no, via, type(exc).__name__)
                 raise TranslateError("Translation request failed (%s)." % type(exc).__name__) from exc
-        if resp.status_code != 200:
-            log.warning("translate %s http=%s", tag, resp.status_code)
-            raise TranslateError("Translation service returned HTTP %s." % resp.status_code)
+            if resp.status_code == 200:
+                break
+            log.warning("translate %s try=%d via=%s http=%s", tag, try_no, via, resp.status_code)
+            if resp.status_code not in RETRY_STATUSES:
+                raise TranslateError("Translation service returned HTTP %s." % resp.status_code,
+                                     retryable=False)
+            if try_no == MAX_TRIES:
+                if resp.status_code == 429:
+                    raise TranslateError("The translation service is rate-limiting requests (HTTP 429). "
+                                         "Try again in a moment.")
+                raise TranslateError("Translation service returned HTTP %s." % resp.status_code)
+            headers = getattr(resp, "headers", None) or {}
+            self._sleep(retry_delay(try_no, headers.get("Retry-After")))
+            if resp.status_code == 429:  # rate limits are per route/IP: prefer the other route if there is one
+                route = (route + 1) % len(routes)
+        else:  # only reachable when the last try was a network error that did not raise
+            raise TranslateError("Cannot reach the translation service. Check the connection or proxy.")
         try:
             payload = resp.json()
         except ValueError as exc:
             raise TranslateError("Translation service returned invalid data.") from exc
         translated, detected = parse_response(payload)
         result = TranslationResult(translated, detected, same_language(detected, target))
-        log.info("translate ok %s via=%s ms=%d detected=%s", tag, via,
+        log.info("translate ok %s tries=%d via=%s ms=%d detected=%s", tag, try_no, via,
                  (time.monotonic() - started) * 1000, detected)
         self._cache_put(key, result)
         return result

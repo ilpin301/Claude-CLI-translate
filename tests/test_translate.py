@@ -60,8 +60,9 @@ def test_plan_attempts():
 
 
 class FakeResp:
-    def __init__(self, status=200, payload=None):
+    def __init__(self, status=200, payload=None, headers=None):
         self.status_code = status
+        self.headers = headers or {}
         self._payload = payload if payload is not None else [[["Privet", "Hello"]], None, "en"]
 
     def json(self):
@@ -83,10 +84,13 @@ class FakeSession:
         return item
 
 
+sleeps = []
+
+
 def make(script, mode="auto", proxies=SOCKS, cache_size=100):
     session = FakeSession(script)
     tr = GoogleTranslator(mode, cache_size=cache_size, session_factory=lambda: session,
-                          proxies_provider=lambda: proxies)
+                          proxies_provider=lambda: proxies, sleep=sleeps.append)
     return tr, session
 
 
@@ -132,11 +136,68 @@ def test_auto_without_system_proxy_has_no_retry():
     assert len(s.calls) == 1
 
 
-def test_http_error_does_not_fall_back():
+@pytest.fixture(autouse=True)
+def _clear_sleeps():
+    sleeps.clear()
+
+
+def test_429_then_ok_retries_on_the_other_route():
     tr, s = make([FakeResp(status=429), FakeResp()])
-    with pytest.raises(TranslateError, match="429"):
+    assert tr.translate("Hello", "ru").text == "Privet"
+    assert [c["proxies"] for c in s.calls] == [None, {"http": PROXY, "https": PROXY}]
+    assert sleeps == [translate.BACKOFF_S[0]]
+
+
+def test_429_without_proxy_retries_same_route_with_backoff():
+    tr, s = make([FakeResp(status=429), FakeResp(status=429), FakeResp()], proxies={})
+    assert tr.translate("Hello", "ru").text == "Privet"
+    assert len(s.calls) == 3 and all(c["proxies"] is None for c in s.calls)
+    assert sleeps == list(translate.BACKOFF_S)
+
+
+def test_429_every_time_gives_up_after_max_tries_with_retryable_error():
+    tr, s = make([FakeResp(status=429)] * 5)
+    with pytest.raises(TranslateError, match="rate-limiting") as info:
         tr.translate("Hello", "ru")
-    assert len(s.calls) == 1
+    assert len(s.calls) == translate.MAX_TRIES and info.value.retryable
+    assert len(sleeps) == translate.MAX_TRIES - 1
+
+
+def test_5xx_retries_on_the_same_route():
+    tr, s = make([FakeResp(status=503), FakeResp()])
+    assert tr.translate("Hello", "ru").text == "Privet"
+    assert [c["proxies"] for c in s.calls] == [None, None]
+
+
+def test_retry_after_header_is_honoured_and_capped():
+    tr, _ = make([FakeResp(status=429, headers={"Retry-After": "3"}), FakeResp()])
+    tr.translate("Hello", "ru")
+    assert sleeps == [3.0]
+    assert translate.retry_delay(1, "999") == translate.RETRY_AFTER_CAP_S
+    assert translate.retry_delay(1, "soon") == translate.BACKOFF_S[0]
+    assert translate.retry_delay(2, None) == translate.BACKOFF_S[1]
+    assert translate.retry_delay(9, None) == translate.BACKOFF_S[-1]
+
+
+def test_other_http_errors_do_not_retry_and_are_not_retryable():
+    tr, s = make([FakeResp(status=403), FakeResp()])
+    with pytest.raises(TranslateError, match="403") as info:
+        tr.translate("Hello", "ru")
+    assert len(s.calls) == 1 and not info.value.retryable and sleeps == []
+
+
+def test_429_then_network_errors_on_both_routes_raises():
+    tr, s = make([FakeResp(status=429), requests.ConnectionError("a"), FakeResp(status=429)])
+    with pytest.raises(TranslateError):
+        tr.translate("Hello", "ru")
+    assert len(s.calls) == 3
+
+
+def test_config_errors_are_not_retryable():
+    tr, _ = make([FakeResp()], mode="system", proxies={})
+    with pytest.raises(TranslateError) as info:
+        tr.translate("Hello", "ru")
+    assert not info.value.retryable
 
 
 def test_parse_error_does_not_fall_back():

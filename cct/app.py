@@ -72,7 +72,7 @@ def _tray_pixmap() -> QPixmap:
 class Bridge(QObject):
     """Carries results from worker threads to the GUI thread (queued signal delivery)."""
     selection = Signal(int, object)  # request id, text or None
-    translated = Signal(int, object, str)  # request id, TranslationResult or None, error message
+    translated = Signal(int, object, str, bool)  # request id, TranslationResult or None, error message, retryable
 
 
 class App:
@@ -87,6 +87,7 @@ class App:
         self.bridge = Bridge()
         self.bridge.selection.connect(self.on_selection)
         self.bridge.translated.connect(self.on_translated)
+        self.popup.retry_requested.connect(self.on_retry)
         self.worker = uia.SelectionWorker(self.bridge.selection.emit, self.exe_allowed)
         self.translator = GoogleTranslator(self.settings["proxy_mode"])
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cct-translate")
@@ -278,23 +279,30 @@ class App:
         self.popup.show_loading(*self._trigger_pt, self._result_lang)
         self.executor.submit(self._translate, self._req_id, self._text, self._result_lang)
 
+    def on_retry(self) -> None:
+        if not self._text or not self.popup.isVisible():
+            return
+        log.info("retry clicked")
+        self.popup.show_loading(*self._trigger_pt, self._result_lang)
+        self.executor.submit(self._translate, self._req_id, self._text, self._result_lang)
+
     def _translate(self, req_id: int, text: str, lang: str) -> None:  # runs on the translate thread
         try:
             result = self.translator.translate(text, lang)
         except TranslateError as exc:
-            self.bridge.translated.emit(req_id, None, str(exc))
+            self.bridge.translated.emit(req_id, None, str(exc), exc.retryable)
             return
         except Exception:
             log.exception("translate failed")
-            self.bridge.translated.emit(req_id, None, "Unexpected translation error (see log).")
+            self.bridge.translated.emit(req_id, None, "Unexpected translation error (see log).", True)
             return
-        self.bridge.translated.emit(req_id, result, "")
+        self.bridge.translated.emit(req_id, result, "", False)
 
-    def on_translated(self, req_id: int, result, error: str) -> None:
+    def on_translated(self, req_id: int, result, error: str, retryable: bool) -> None:
         if req_id != self._req_id or not self.popup.isVisible():
             return
         if result is None:
-            self.popup.show_error(error)
+            self.popup.show_error(error, retryable)
         else:
             self.popup.show_result(result, self._truncated, self._result_lang)
 
