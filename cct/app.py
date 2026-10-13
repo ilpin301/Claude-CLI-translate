@@ -16,11 +16,11 @@ import queue
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-from PySide6.QtCore import QObject, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QIcon, QPixmap
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import config, winutil
+from . import config, settings, winutil
 from .gating import WM_LBUTTONDOWN, WM_LBUTTONUP, Gate
 from .icon import IconWindow
 from .normalize import normalize
@@ -53,7 +53,19 @@ def setup_logging() -> None:
 
 def _tray_pixmap() -> QPixmap:
     pixmap = QPixmap(32, 32)
-    pixmap.fill(QColor("#2d6cdf"))
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(QColor("#2d6cdf"))
+    painter.drawRoundedRect(pixmap.rect().adjusted(1, 1, -1, -1), 7, 7)
+    painter.setPen(QColor("white"))
+    font = QFont("Segoe UI")
+    font.setPixelSize(24)
+    font.setBold(True)
+    painter.setFont(font)
+    painter.drawText(pixmap.rect(), Qt.AlignCenter, "A")
+    painter.end()
     return pixmap
 
 
@@ -70,7 +82,8 @@ class App:
         self.hook = MouseHook()
         self.icon = IconWindow()
         self.icon.clicked.connect(self.on_icon_clicked)
-        self.popup = PopupWindow()
+        self.settings = settings.load()
+        self.popup = PopupWindow(self.settings["font_px"])
         self.bridge = Bridge()
         self.bridge.selection.connect(self.on_selection)
         self.bridge.translated.connect(self.on_translated)
@@ -96,6 +109,17 @@ class App:
         self.tray = QSystemTrayIcon(QIcon(_tray_pixmap()))
         self.tray.setToolTip("Claude CLI Translate - hold Shift while dragging to select")
         menu = QMenu()
+        font_menu = menu.addMenu("Font size")
+        self._font_group = QActionGroup(font_menu)
+        self._font_group.setExclusive(True)
+        for px, label in settings.FONT_SIZES:
+            action = QAction("%s (%d px)" % (label, px), font_menu)
+            action.setCheckable(True)
+            action.setChecked(px == self.settings["font_px"])
+            action.triggered.connect(lambda _checked=False, value=px: self.set_font(value))
+            self._font_group.addAction(action)
+            font_menu.addAction(action)
+        menu.addSeparator()
         quit_action = QAction("Quit", menu)
         quit_action.triggered.connect(self.quit)
         menu.addAction(quit_action)
@@ -139,7 +163,6 @@ class App:
                 return
             self._ignore_up = False
             self._req_id += 1  # invalidates any pending read or translation
-            self.icon.hide_icon()
             self.popup.hide_popup()
         elif msg == WM_LBUTTONUP and self._ignore_up:
             self._ignore_up = False
@@ -156,6 +179,7 @@ class App:
         self._req_id += 1
         self._trigger_pt = (trigger.x, trigger.y)
         self._text = None
+        self.icon.hide_icon()  # the old icon belongs to the previous selection; a new one appears if this read succeeds
         self.worker.request(self._req_id)
 
     def on_selection(self, req_id: int, text) -> None:
@@ -196,6 +220,13 @@ class App:
             self.popup.show_error(error)
         else:
             self.popup.show_result(result, self._truncated)
+
+    def set_font(self, px: int) -> None:
+        px = settings.clamp_font(px)
+        self.settings["font_px"] = px
+        self.popup.set_font_px(px)
+        settings.save(self.settings)
+        log.info("popup font size set to %d px", px)
 
     def check_hook(self) -> None:
         cursor = winutil.cursor_pos()

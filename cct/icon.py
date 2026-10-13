@@ -2,7 +2,7 @@
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import QWidget
 
@@ -36,9 +36,6 @@ class IconWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.NoFocus)
         self.resize(config.ICON_SIZE, config.ICON_SIZE)
-        self._timer = QTimer(self)
-        self._timer.setSingleShot(True)
-        self._timer.timeout.connect(self.hide_icon)
         self._styled = False
 
     def _hwnd(self) -> int:
@@ -60,10 +57,8 @@ class IconWindow(QWidget):
         self.show()
         self._apply_ex_style()
         user32.SetWindowPos(self._hwnd(), HWND_TOPMOST, x, y, size, size, SWP_NOACTIVATE | SWP_SHOWWINDOW)
-        self._timer.start(config.ICON_TIMEOUT_MS)
 
     def hide_icon(self) -> None:
-        self._timer.stop()
         self.hide()
 
     def contains_physical(self, x: int, y: int) -> bool:
@@ -72,6 +67,8 @@ class IconWindow(QWidget):
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.LeftButton:
             self.clicked.emit()
+        elif event.button() == Qt.RightButton:
+            self.hide_icon()
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
@@ -80,7 +77,8 @@ class IconWindow(QWidget):
         painter.setBrush(QColor("#2d6cdf"))
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 5, 5)
         painter.setPen(QColor("white"))
-        font = QFont("Segoe UI", 9)
+        font = QFont("Segoe UI")
+        font.setPixelSize(round(self.height() * 0.45))
         font.setBold(True)
         painter.setFont(font)
         painter.drawText(self.rect(), Qt.AlignCenter, "A文")

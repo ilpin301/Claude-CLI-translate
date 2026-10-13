@@ -12,7 +12,7 @@ from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout,
                                QWidget)
 
-from . import config, winutil
+from . import config, settings, winutil
 from .geometry import clamp_rect, point_in_rect
 from .icon import (GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, WS_EX_NOACTIVATE,
                    WS_EX_TOOLWINDOW, user32)
@@ -23,20 +23,17 @@ _BTN_CSS = ("QPushButton{color:#ddd;background:#333;border:none;border-radius:4p
 
 
 class PopupWindow(QWidget):
-    def __init__(self):
+    def __init__(self, font_px: int = settings.DEFAULT_FONT_PX):
         super().__init__(
             None, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFocusPolicy(Qt.NoFocus)
-        self.setFixedWidth(config.POPUP_MAX_WIDTH)
+        self._width = config.POPUP_MAX_WIDTH
+        self._max_height = config.POPUP_MAX_HEIGHT
         self._styled = False
         self._anchor = (0, 0)
         self._translation = ""
-
-        font = QFont("Segoe UI")
-        font.setPixelSize(13)
-        self.setFont(font)
 
         self._header = QLabel()
         self._header.setStyleSheet("color:#9aa0a6;")
@@ -65,7 +62,6 @@ class PopupWindow(QWidget):
                                    "QScrollArea>QWidget>QWidget{background:transparent;}")
         self._note = QLabel()
         self._note.setWordWrap(True)
-        self._note.setStyleSheet("color:#9aa0a6;font-size:12px;")
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(_MARGIN, _MARGIN, _MARGIN, _MARGIN)
@@ -77,8 +73,22 @@ class PopupWindow(QWidget):
         self._copy_timer = QTimer(self)
         self._copy_timer.setSingleShot(True)
         self._copy_timer.timeout.connect(lambda: self._copy.setText("Copy"))
+        self.set_font_px(font_px)
 
     # ---- public API ----
+
+    def set_font_px(self, px: int) -> None:
+        """Pixel font size; popup width and max height scale with it. Applies from the next content update."""
+        px = settings.clamp_font(px)
+        scale = px / settings.BASE_FONT_PX
+        self._width = round(config.POPUP_MAX_WIDTH * scale)
+        self._max_height = round(config.POPUP_MAX_HEIGHT * scale)
+        font = QFont("Segoe UI")
+        font.setPixelSize(px)
+        self.setFont(font)
+        self.setStyleSheet("QLabel, QPushButton {font-family:'Segoe UI'; font-size:%dpx;}" % px)
+        self._note.setStyleSheet("color:#9aa0a6;font-size:%dpx;" % max(11, round(px * 0.9)))
+        self.setFixedWidth(self._width)
 
     def show_loading(self, px: int, py: int, target: str) -> None:
         self._anchor = (px, py)
@@ -126,11 +136,11 @@ class PopupWindow(QWidget):
         self._note.setText(note)
         self._note.setVisible(bool(note))
         self._body.setText(body)
-        inner = config.POPUP_MAX_WIDTH - 2 * _MARGIN
+        inner = self._width - 2 * _MARGIN
         body_h = self._body.heightForWidth(inner - 14)  # 14: scrollbar allowance
-        self._scroll.setFixedHeight(min(max(body_h, 20) + 4, config.POPUP_MAX_HEIGHT))
+        self._scroll.setFixedHeight(min(max(body_h, 20) + 4, self._max_height))
         self.layout().activate()
-        self.resize(config.POPUP_MAX_WIDTH, self.layout().sizeHint().height())
+        self.resize(self._width, self.layout().sizeHint().height())
         self._place()
 
     def _place(self) -> None:
