@@ -1,4 +1,8 @@
-"""User settings persisted as JSON in %APPDATA%/ClaudeCliTranslate/settings.json (popup font size for now)."""
+"""User settings persisted as JSON in %APPDATA%/ClaudeCliTranslate/settings.json.
+
+Every key is validated on load (bad values fall back to the default), so a hand-edited or corrupt
+file can never break start-up. Writes are atomic.
+"""
 import json
 import logging
 import os
@@ -15,6 +19,24 @@ MIN_FONT_PX = 10
 MAX_FONT_PX = 40
 FONT_SIZES = ((13, "Small"), (16, "Medium"), (19, "Large"), (23, "Extra large"))
 
+LANGUAGES = (("ru", "Russian"), ("en", "English"), ("de", "German"), ("fr", "French"),
+             ("es", "Spanish"), ("it", "Italian"), ("pt", "Portuguese"), ("uk", "Ukrainian"),
+             ("pl", "Polish"), ("tr", "Turkish"), ("zh-CN", "Chinese (Simplified)"),
+             ("ja", "Japanese"), ("ko", "Korean"))
+SCOPES = ("terminals", "all")
+PROXY_MODES = ("auto", "direct", "system")
+DEFAULT_ALLOWLIST = ("windowsterminal.exe",)
+
+DEFAULTS = {
+    "font_px": DEFAULT_FONT_PX,
+    "target_lang": "ru",
+    "scope": "terminals",
+    "enabled": True,
+    "proxy_mode": "auto",
+    "allowlist": list(DEFAULT_ALLOWLIST),
+    "first_run_done": False,
+}
+
 
 def clamp_font(px) -> int:
     try:
@@ -30,18 +52,64 @@ def snap_font(px) -> int:
     return min((size for size, _label in FONT_SIZES), key=lambda size: (abs(size - value), size))
 
 
+def valid_lang(value) -> str:
+    codes = {code.lower(): code for code, _name in LANGUAGES}
+    if isinstance(value, str) and value.lower() in codes:
+        return codes[value.lower()]
+    return DEFAULTS["target_lang"]
+
+
+def clean_allowlist(value) -> list:
+    """Lower-cased, de-duplicated exe names; an empty or invalid list falls back to the default."""
+    if not isinstance(value, list):
+        return list(DEFAULT_ALLOWLIST)
+    out = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            name = os.path.basename(item.strip().replace("\\", "/")).lower()
+            if name and name not in out:
+                out.append(name)
+    return out or list(DEFAULT_ALLOWLIST)
+
+
+def normalize(data) -> dict:
+    """Validate a decoded JSON object into a complete settings dict."""
+    out = dict(DEFAULTS)
+    out["allowlist"] = list(DEFAULT_ALLOWLIST)
+    if not isinstance(data, dict):
+        return out
+    if "font_px" in data:
+        out["font_px"] = snap_font(data["font_px"])
+    if "target_lang" in data:
+        out["target_lang"] = valid_lang(data["target_lang"])
+    if data.get("scope") in SCOPES:
+        out["scope"] = data["scope"]
+    if data.get("proxy_mode") in PROXY_MODES:
+        out["proxy_mode"] = data["proxy_mode"]
+    if "allowlist" in data:
+        out["allowlist"] = clean_allowlist(data["allowlist"])
+    for key in ("enabled", "first_run_done"):
+        if isinstance(data.get(key), bool):
+            out[key] = data[key]
+    return out
+
+
+def exe_allowed(exe: str, settings: dict) -> bool:
+    """Whether a foreground process (lower-case exe name) may trigger the app under these settings."""
+    if not settings.get("enabled", True) or not exe:
+        return False
+    return settings.get("scope") == "all" or exe in settings.get("allowlist", DEFAULT_ALLOWLIST)
+
+
 def load(path: str = PATH) -> dict:
-    settings = {"font_px": DEFAULT_FONT_PX}
     try:
         with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict) and "font_px" in data:
-            settings["font_px"] = snap_font(data["font_px"])
+            return normalize(json.load(f))
     except FileNotFoundError:
         pass
     except (OSError, ValueError) as exc:
         log.warning("settings unreadable (%s); using defaults", type(exc).__name__)
-    return settings
+    return normalize(None)
 
 
 def save(settings: dict, path: str = PATH) -> None:
@@ -52,7 +120,7 @@ def save(settings: dict, path: str = PATH) -> None:
         fd, tmp = tempfile.mkstemp(dir=folder, suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump({"font_px": clamp_font(settings.get("font_px"))}, f)
+                json.dump(normalize(settings), f, indent=2)
             os.replace(tmp, path)
         except Exception:
             if os.path.exists(tmp):

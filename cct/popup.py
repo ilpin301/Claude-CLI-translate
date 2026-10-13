@@ -95,14 +95,14 @@ class PopupWindow(QWidget):
         self._translation = ""
         self._set_content("auto → %s" % target, "Translating…", "", copy=False)
 
-    def show_result(self, result, truncated: bool) -> None:
+    def show_result(self, result, truncated: bool, target: str) -> None:
         notes = []
         if result.same_lang:
             notes.append("Source and target language are the same.")
         if truncated:
             notes.append("Text was truncated to %d characters." % config.MAX_CHARS)
         self._translation = result.text
-        self._set_content("%s → %s" % (result.detected_lang or "auto", config.TARGET_LANG),
+        self._set_content("%s → %s" % (result.detected_lang or "auto", target),
                           result.text, " ".join(notes), copy=True)
 
     def show_error(self, msg: str) -> None:

@@ -48,8 +48,9 @@ def _apartment_name() -> str:
 
 
 class SelectionWorker:
-    def __init__(self, on_result):
+    def __init__(self, on_result, exe_allowed=None):
         self._on_result = on_result
+        self._exe_allowed = exe_allowed or (lambda exe: exe in config.ALLOWLIST)
         self._q = queue.Queue()
         self._latest = 0
         self._call_started = None  # monotonic time of the UIA call in flight, else None
@@ -128,7 +129,7 @@ class SelectionWorker:
         status, text = "error", ""
         try:
             exe = winutil.foreground_exe()  # re-verified right before the UIA call
-            if exe not in config.ALLOWLIST:
+            if not self._exe_allowed(exe):
                 status = "skipped"
                 return status, text
             self._call_started = time.monotonic()
