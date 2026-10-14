@@ -30,6 +30,8 @@ DEFAULT_ALLOWLIST = ("windowsterminal.exe",)
 # are matched by window class instead. Measured with tools/probe_host.py.
 DEFAULT_CLASSES = ("consolewindowclass",)
 
+AUTO_LANG = "auto"  # source language "detect automatically" (Write / Paste window only)
+
 DEFAULTS = {
     "font_px": DEFAULT_FONT_PX,
     "target_lang": "ru",
@@ -39,6 +41,11 @@ DEFAULTS = {
     "allowlist": list(DEFAULT_ALLOWLIST),
     "allowlist_classes": list(DEFAULT_CLASSES),
     "first_run_done": False,
+    # Write / Paste window
+    "writer_src": AUTO_LANG,
+    "writer_dst": "en",
+    "writer_font_in": DEFAULT_FONT_PX,
+    "writer_font_out": DEFAULT_FONT_PX,
 }
 
 
@@ -56,11 +63,11 @@ def snap_font(px) -> int:
     return min((size for size, _label in FONT_SIZES), key=lambda size: (abs(size - value), size))
 
 
-def valid_lang(value) -> str:
+def valid_lang(value, default=None) -> str:
     codes = {code.lower(): code for code, _name in LANGUAGES}
     if isinstance(value, str) and value.lower() in codes:
         return codes[value.lower()]
-    return DEFAULTS["target_lang"]
+    return default or DEFAULTS["target_lang"]
 
 
 def clean_classes(value) -> list:
@@ -106,6 +113,14 @@ def normalize(data) -> dict:
         out["allowlist"] = clean_allowlist(data["allowlist"])
     if "allowlist_classes" in data:
         out["allowlist_classes"] = clean_classes(data["allowlist_classes"])
+    if isinstance(data.get("writer_src"), str):
+        out["writer_src"] = AUTO_LANG if data["writer_src"].lower() == AUTO_LANG else valid_lang(
+            data["writer_src"], AUTO_LANG)
+    if "writer_dst" in data:
+        out["writer_dst"] = valid_lang(data["writer_dst"], DEFAULTS["writer_dst"])
+    for key in ("writer_font_in", "writer_font_out"):
+        if key in data:
+            out[key] = snap_font(data[key])
     for key in ("enabled", "first_run_done"):
         if isinstance(data.get(key), bool):
             out[key] = data[key]

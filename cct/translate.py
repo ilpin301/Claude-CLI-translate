@@ -51,7 +51,7 @@ class TranslationResult:
 
 class Translator(ABC):
     @abstractmethod
-    def translate(self, text: str, target: str) -> TranslationResult:
+    def translate(self, text: str, target: str, source: str = "auto") -> TranslationResult:
         ...
 
 
@@ -171,9 +171,10 @@ class GoogleTranslator(Translator):
             while len(self._cache) > self.cache_size:
                 self._cache.popitem(last=False)
 
-    def _request(self, session, text: str, target: str, proxy: Optional[str], endpoint=ENDPOINTS[0]):
+    def _request(self, session, text: str, target: str, proxy: Optional[str], endpoint=ENDPOINTS[0],
+                 source: str = "auto"):
         _name, url, fixed = endpoint
-        params = dict(fixed, tl=target)
+        params = dict(fixed, tl=target, sl=source)
         proxies = {"http": proxy, "https": proxy} if proxy else None
         timeout = (config.CONNECT_TIMEOUT_S, config.READ_TIMEOUT_S)
         if len(text) > POST_THRESHOLD:
@@ -182,8 +183,8 @@ class GoogleTranslator(Translator):
         params["q"] = text
         return session.request("GET", url, params=params, timeout=timeout, proxies=proxies)
 
-    def translate(self, text: str, target: str) -> TranslationResult:
-        key = (text, target)
+    def translate(self, text: str, target: str, source: str = "auto") -> TranslationResult:
+        key = (text, target, source)
         tag = "len=%d sha1=%s" % (len(text), _fingerprint(text))
         cached = self._cache_get(key)
         if cached is not None:
@@ -201,7 +202,7 @@ class GoogleTranslator(Translator):
             via = "proxy" if proxy else "direct"
             ep_name = ENDPOINTS[ep][0]
             try:
-                resp = self._request(session, text, target, proxy, ENDPOINTS[ep])
+                resp = self._request(session, text, target, proxy, ENDPOINTS[ep], source)
             except (requests.ConnectionError, requests.Timeout) as exc:
                 net_failures += 1
                 log.warning("translate %s try=%d via=%s ep=%s network error %s", tag, try_no, via, ep_name, type(exc).__name__)

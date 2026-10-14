@@ -8,10 +8,7 @@ result. Worker threads reach the GUI thread only through Qt signals. A mouse-dow
 """
 from . import uia  # noqa: F401  (must come first: sets sys.coinit_flags = 0 before PySide6/comtypes)
 
-import faulthandler
 import logging
-import logging.handlers
-import os
 import queue
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -27,28 +24,9 @@ from .normalize import normalize
 from .popup import PopupWindow
 from .translate import GoogleTranslator, TranslateError
 from .winhook import MouseHook
+from .writer import WriterWindow
 
 log = logging.getLogger("cct")
-LOG_DIR = os.path.join(os.environ.get("APPDATA", "."), "ClaudeCliTranslate")
-_fault_file = None
-
-
-def setup_logging() -> None:
-    global _fault_file
-    os.makedirs(LOG_DIR, exist_ok=True)
-    handler = logging.handlers.RotatingFileHandler(
-        os.path.join(LOG_DIR, "cct.log"), maxBytes=512 * 1024, backupCount=2, encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    root.addHandler(handler)
-    _fault_file = open(os.path.join(LOG_DIR, "cct-fault.log"), "a", encoding="utf-8")
-    faulthandler.enable(_fault_file)
-
-    def _excepthook(exc_type, exc, tb):
-        logging.getLogger("cct").critical("uncaught exception", exc_info=(exc_type, exc, tb))
-
-    sys.excepthook = _excepthook
 
 
 def _tray_pixmap() -> QPixmap:
@@ -73,6 +51,7 @@ class Bridge(QObject):
     """Carries results from worker threads to the GUI thread (queued signal delivery)."""
     selection = Signal(int, object)  # request id, text or None
     translated = Signal(int, object, str, bool)  # request id, TranslationResult or None, error message, retryable
+    written = Signal(int, object, str, bool)  # same, for the Write / Paste window
 
 
 class App:
@@ -88,6 +67,10 @@ class App:
         self.bridge.selection.connect(self.on_selection)
         self.bridge.translated.connect(self.on_translated)
         self.popup.retry_requested.connect(self.on_retry)
+        self.writer = WriterWindow(self.settings)
+        self.writer.request.connect(self.on_writer_request)
+        self.writer.settings_changed.connect(self._save)
+        self.bridge.written.connect(self.on_written)
         self.worker = uia.SelectionWorker(self.bridge.selection.emit, self.window_allowed)
         self.translator = GoogleTranslator(self.settings["proxy_mode"])
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cct-translate")
@@ -120,23 +103,24 @@ class App:
         self._lang_group = self._radio_menu(
             lang_menu, [(code, "%s (%s)" % (name, code)) for code, name in settings.LANGUAGES],
             self.settings["target_lang"], self.set_target_lang)
-        scope_menu = menu.addMenu("Scope")
+        write_action = QAction("Write / Paste...", menu)
+        write_action.triggered.connect(self.writer.present)
+        menu.addAction(write_action)
+        settings_menu = menu.addMenu("Settings")
+        scope_menu = settings_menu.addMenu("Scope")
         self._scope_group = self._radio_menu(
             scope_menu, [("terminals", "Terminals only (allowlist)"), ("all", "All applications")],
             self.settings["scope"], self.set_scope)
-        font_menu = menu.addMenu("Font size")
+        font_menu = settings_menu.addMenu("Font size")
         self._font_group = self._radio_menu(
             font_menu, [(px, "%s (%d px)" % (label, px)) for px, label in settings.FONT_SIZES],
             self.settings["font_px"], self.set_font)
-        self._autostart_action = QAction("Start with Windows", menu)
+        self._autostart_action = QAction("Start with Windows", settings_menu)
         self._autostart_action.setCheckable(True)
         self._autostart_action.setChecked(autostart.is_enabled())
         self._autostart_action.toggled.connect(self.set_autostart)
-        menu.addAction(self._autostart_action)
+        settings_menu.addAction(self._autostart_action)
         menu.addSeparator()
-        log_action = QAction("Open log", menu)
-        log_action.triggered.connect(self.open_log)
-        menu.addAction(log_action)
         quit_action = QAction("Quit", menu)
         quit_action.triggered.connect(self.quit)
         menu.addAction(quit_action)
@@ -186,13 +170,6 @@ class App:
             self._autostart_action.blockSignals(False)
             self.tray.showMessage("Claude CLI Translate", "Could not change the start-up setting.")
 
-    def open_log(self) -> None:
-        path = os.path.join(LOG_DIR, "cct.log")
-        try:
-            os.startfile(path)  # noqa: S606  (Windows only; opens in the default editor)
-        except OSError:
-            log.warning("could not open the log file")
-
     def window_allowed(self, exe: str, window_class: str) -> bool:
         return settings.window_allowed(exe, window_class, self.settings)
 
@@ -217,6 +194,7 @@ class App:
         self.watchdog.stop()
         self.icon.hide_icon()
         self.popup.hide_popup()
+        self.writer.close()
         self.worker.stop()
         self.executor.shutdown(wait=False, cancel_futures=True)
         self.hook.stop()
@@ -234,8 +212,9 @@ class App:
     def handle(self, ev) -> None:
         msg, x, y, _tick, _shift = ev
         if msg == WM_LBUTTONDOWN:
-            if self.popup.contains_physical(x, y) or self.icon.contains_physical(x, y):
-                self._ignore_up = True  # the popup / icon handle their own clicks
+            if (self.popup.contains_physical(x, y) or self.icon.contains_physical(x, y)
+                    or self.writer.contains_physical(x, y)):
+                self._ignore_up = True  # the popup / icon / writer window handle their own clicks
                 return
             self._ignore_up = False
             self._req_id += 1  # invalidates any pending read or translation
@@ -294,7 +273,7 @@ class App:
             return
         except Exception:
             log.exception("translate failed")
-            self.bridge.translated.emit(req_id, None, "Unexpected translation error (see log).", True)
+            self.bridge.translated.emit(req_id, None, "Unexpected translation error.", True)
             return
         self.bridge.translated.emit(req_id, result, "", False)
 
@@ -305,6 +284,29 @@ class App:
             self.popup.show_error(error, retryable)
         else:
             self.popup.show_result(result, self._truncated, self._result_lang)
+
+    def on_writer_request(self, req_id: int, text: str, source: str, target: str) -> None:
+        self.executor.submit(self._translate_writer, req_id, text, source, target)
+
+    def _translate_writer(self, req_id: int, text: str, source: str, target: str) -> None:  # translate thread
+        if req_id != self.writer.current_id:
+            return  # the user kept typing; a newer request follows
+        try:
+            result = self.translator.translate(text, target, source)
+        except TranslateError as exc:
+            self.bridge.written.emit(req_id, None, str(exc), exc.retryable)
+            return
+        except Exception:
+            log.exception("writer translate failed")
+            self.bridge.written.emit(req_id, None, "Unexpected translation error.", True)
+            return
+        self.bridge.written.emit(req_id, result, "", False)
+
+    def on_written(self, req_id: int, result, error: str, retryable: bool) -> None:
+        if result is None:
+            self.writer.show_error(req_id, error, retryable)
+        else:
+            self.writer.show_result(req_id, result)
 
     def set_font(self, px: int) -> None:
         px = settings.clamp_font(px)
@@ -330,7 +332,7 @@ class App:
 def main() -> None:
     if not singleton.acquire():
         return  # another instance is already running in this session
-    setup_logging()
+    logging.getLogger().addHandler(logging.NullHandler())  # nothing is written to disk; also silences logging's stderr fallback
     qapp = QApplication(sys.argv)
     qapp.setQuitOnLastWindowClosed(False)
     app = App(qapp)
