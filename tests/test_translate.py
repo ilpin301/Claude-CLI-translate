@@ -273,3 +273,13 @@ def test_session_sends_browser_user_agent():
     assert "python-requests" not in session.headers["User-Agent"]
     assert session.headers["User-Agent"] == translate.USER_AGENT
     assert session.trust_env is False
+
+
+def test_source_language_is_sent_and_cached_separately():
+    tr, s = make([FakeResp(), FakeResp()])
+    tr.translate("Hello", "ru")
+    tr.translate("Hello", "ru", "en")
+    assert s.calls[0]["params"]["sl"] == "auto"
+    assert s.calls[1]["params"]["sl"] == "en"
+    tr.translate("Hello", "ru", "en")  # cached: no third call
+    assert len(s.calls) == 2

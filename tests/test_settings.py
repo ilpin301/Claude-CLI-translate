@@ -57,7 +57,8 @@ def test_full_roundtrip(tmp_path):
     p = str(tmp_path / "s.json")
     custom = {"font_px": 19, "target_lang": "de", "scope": "all", "enabled": False,
               "proxy_mode": "system", "allowlist": ["wt.exe", "code.exe"],
-              "allowlist_classes": ["consolewindowclass", "myclass"], "first_run_done": True}
+              "allowlist_classes": ["consolewindowclass", "myclass"], "first_run_done": True,
+              "writer_src": "de", "writer_dst": "fr", "writer_font_in": 13, "writer_font_out": 23}
     settings.save(custom, p)
     assert settings.load(p) == custom
 
@@ -105,3 +106,13 @@ def test_class_allowlist_cleaning():
     assert settings.clean_classes([" ConsoleWindowClass ", "x", "X", 5, ""]) == ["consolewindowclass", "x"]
     assert settings.clean_classes([]) == []  # explicit empty list switches class matching off
     assert settings.clean_classes("x") == ["consolewindowclass"]
+
+
+def test_writer_defaults_and_validation():
+    d = settings.normalize(None)
+    assert (d["writer_src"], d["writer_dst"], d["writer_font_in"], d["writer_font_out"]) == ("auto", "en", 16, 16)
+    s = settings.normalize({"writer_src": "DE", "writer_dst": "zz", "writer_font_in": 20, "writer_font_out": "x"})
+    assert (s["writer_src"], s["writer_dst"], s["writer_font_in"], s["writer_font_out"]) == ("de", "en", 19, 16)
+    assert settings.normalize({"writer_src": "AUTO"})["writer_src"] == "auto"
+    assert settings.normalize({"writer_src": "klingon"})["writer_src"] == "auto"
+    assert settings.normalize({"writer_src": 5})["writer_src"] == "auto"
