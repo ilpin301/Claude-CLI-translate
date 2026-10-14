@@ -7,7 +7,7 @@ The window never talks to the network itself: it emits `request(req_id, text, so
 the app answers with show_result / show_error (same req_id). Answers for older requests are dropped.
 Copy buttons are explicit clipboard writes, like the popup's.
 """
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, QPolygonF, QShortcut
 from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
                                QVBoxLayout, QWidget)
@@ -23,7 +23,8 @@ QPlainTextEdit {background:#1c1c1c; color:#eaeaea; border:1px solid #7c7c7c; bor
 QComboBox, QPushButton#pill {color:%(text)s; background:transparent; border:2px solid %(blue)s;
                 border-radius:12px; padding:3px 12px; min-height:26px; font-size:16px;}
 QComboBox:hover, QPushButton#pill:hover {background:#24303d;}
-QComboBox::drop-down {border:none; width:20px;}
+QComboBox::drop-down {border:none; width:0;}
+QComboBox QLineEdit {background:transparent; border:none; color:%(text)s; font-size:16px;}
 QComboBox QAbstractItemView {background:#1c1c1c; color:%(text)s; font-size:16px; selection-background-color:#24303d;
                              selection-color:#ffffff; border:1px solid %(blue)s; outline:0;}
 QPushButton#retry {color:#ddd; background:#333; border:none; border-radius:4px; padding:2px 10px;}
@@ -31,6 +32,28 @@ QPushButton#retry:hover {background:#444;}
 QLabel#status {color:#9aa0a6;}
 QLabel#status[error="true"] {color:#e57373;}
 """ % {"blue": BLUE, "text": BTN_TEXT}
+
+
+class CenterCombo(QComboBox):
+    """Drop-down whose text is centred: a read-only line edit shows it, and a click on it opens the list."""
+
+    def __init__(self):
+        super().__init__()
+        self.setEditable(True)
+        edit = self.lineEdit()
+        edit.setReadOnly(True)
+        edit.setAlignment(Qt.AlignCenter)
+        edit.setFocusPolicy(Qt.NoFocus)
+        edit.setCursor(Qt.PointingHandCursor)
+        edit.installEventFilter(self)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.lineEdit() and event.type() == QEvent.MouseButtonPress:
+            self.showPopup()
+            return True
+        return super().eventFilter(obj, event)
 
 
 class TranslateButton(QPushButton):
@@ -163,7 +186,7 @@ class WriterWindow(QWidget):
 
     @staticmethod
     def _lang_combo(auto: bool) -> QComboBox:
-        combo = QComboBox()
+        combo = CenterCombo()
         if auto:
             combo.addItem("Auto detect", settings.AUTO_LANG)
         for code, name in settings.LANGUAGES:
@@ -174,9 +197,11 @@ class WriterWindow(QWidget):
 
     @staticmethod
     def _size_combo() -> QComboBox:
-        combo = QComboBox()
+        combo = CenterCombo()
         for px, label in settings.FONT_SIZES:
             combo.addItem(label, px)
+        combo.setMinimumContentsLength(11)
+        combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         return combo
 
     # ---- public API ----
