@@ -15,21 +15,22 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel, QPl
 from . import config, settings
 
 BLUE = "#2b79c2"
+BTN_TEXT = "#d0d0d0"  # light gray text inside the pill buttons and dropdowns
 _CSS = """
 QWidget#writer {background:#1c1c1c;}
 QPlainTextEdit {background:#1c1c1c; color:#eaeaea; border:1px solid #7c7c7c; border-radius:12px; padding:8px;
                 selection-background-color:#2b79c2;}
-QComboBox, QPushButton#pill {color:%(blue)s; background:transparent; border:2px solid %(blue)s;
-                border-radius:12px; padding:3px 12px; min-height:22px;}
+QComboBox, QPushButton#pill {color:%(text)s; background:transparent; border:2px solid %(blue)s;
+                border-radius:12px; padding:3px 12px; min-height:26px; font-size:16px;}
 QComboBox:hover, QPushButton#pill:hover {background:#24303d;}
 QComboBox::drop-down {border:none; width:20px;}
-QComboBox QAbstractItemView {background:#1c1c1c; color:%(blue)s; selection-background-color:#24303d;
+QComboBox QAbstractItemView {background:#1c1c1c; color:%(text)s; font-size:16px; selection-background-color:#24303d;
                              selection-color:#ffffff; border:1px solid %(blue)s; outline:0;}
 QPushButton#retry {color:#ddd; background:#333; border:none; border-radius:4px; padding:2px 10px;}
 QPushButton#retry:hover {background:#444;}
 QLabel#status {color:#9aa0a6;}
 QLabel#status[error="true"] {color:#e57373;}
-""" % {"blue": BLUE}
+""" % {"blue": BLUE, "text": BTN_TEXT}
 
 
 class TranslateButton(QPushButton):
@@ -155,7 +156,7 @@ class WriterWindow(QWidget):
     def _pill(text: str) -> QPushButton:
         btn = QPushButton(text)
         btn.setObjectName("pill")
-        btn.setMinimumWidth(84)
+        btn.setMinimumWidth(92)
         btn.setCursor(Qt.PointingHandCursor)
         btn.setFocusPolicy(Qt.NoFocus)
         return btn
