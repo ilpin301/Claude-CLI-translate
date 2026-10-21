@@ -32,10 +32,11 @@ DEFAULT_ALLOWLIST = ("windowsterminal.exe",)
 # are matched by window class instead. Measured with tools/probe_host.py.
 DEFAULT_CLASSES = ("consolewindowclass",)
 
-# GLM models offered for the GLM icon: (API model id, label). The Flash models are free at Z.ai.
+# GLM models offered for the GLM icon: (API model id, label). The 4.x Flash models are free at Z.ai; GLM-5.3-Flash needs a Z.ai plan or balance.
 GLM_MODELS = (("glm-4.7-flash", "GLM-4.7-Flash (free, fast)"),
               ("glm-4.5-flash", "GLM-4.5-Flash (free)"),
-              ("glm-4.7", "GLM-4.7 (best, paid)"))
+              ("glm-4.7", "GLM-4.7 (best, paid)"),
+              ("glm-5.3-flash", "GLM-5.3-Flash (Coding Plan, fast)"))
 DEFAULT_GLM_MODEL = GLM_MODELS[0][0]
 DEFAULT_GLM_BASE_URL = "https://api.z.ai/api/paas/v4"  # China-region keys: https://open.bigmodel.cn/api/paas/v4
 MAX_KEY_CHARS = 300
