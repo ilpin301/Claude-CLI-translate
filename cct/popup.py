@@ -28,6 +28,7 @@ _MIN_W, _MIN_H = 220, 90  # smallest size the user can shrink the popup to
 _QT_MAX = 16777215  # QWIDGETSIZE_MAX
 _GRIP = 16
 _RADIUS = 8
+_FRAME = 2  # frame width in logical px
 _BAR_PAD = 6  # title bar inner padding (logical px)
 _BTN_CSS = ("QPushButton{color:white;background:rgba(255,255,255,50);border:none;border-radius:4px;padding:2px 8px;}"
             "QPushButton:hover{background:rgba(255,255,255,90);}")
@@ -310,6 +311,7 @@ class PopupWindow(QWidget):
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(QPen(self._bar.color, 1))  # 1 px frame in the title bar colour
+        painter.setPen(QPen(self._bar.color, _FRAME))  # frame in the title bar colour
         painter.setBrush(QColor("#1f1f1f"))
-        painter.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), _RADIUS, _RADIUS)
+        half = _FRAME / 2  # the pen is centred on the path: inset by half its width to stay inside the window
+        painter.drawRoundedRect(QRectF(half, half, self.width() - _FRAME, self.height() - _FRAME), _RADIUS, _RADIUS)
