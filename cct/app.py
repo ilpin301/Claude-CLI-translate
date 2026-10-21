@@ -1,6 +1,6 @@
 """Phase P2 app: mouse hook + Shift gating -> UIA read -> normalise -> icons -> click -> translate -> popup.
 
-Flow: a Shift+drag trigger in an allowlisted window asks the UIA worker (cct.uia) for the selection;
+Flow: a mouse-drag trigger (any drag, or Shift+drag only, per the "trigger" setting) in an allowlisted window asks the UIA worker (cct.uia) for the selection;
 a non-empty result is normalised and the icons appear (Google, and GLM unless switched off). Nothing
 is translated or sent until an icon is clicked; then the stored text is translated on that engine's
 worker thread and the popup shows the result. The other icon stays until it is clicked or dismissed. Worker threads reach the GUI thread only through Qt signals. A mouse-down outside the popup
@@ -58,12 +58,13 @@ class Bridge(QObject):
 class App:
     def __init__(self, qapp: QApplication):
         self.qapp = qapp
-        self.gate = Gate(config.REQUIRE_SHIFT, config.MIN_DRAG_PX)
+        self.gate = Gate(True, config.MIN_DRAG_PX)  # require_shift is set from the settings below
         self.hook = MouseHook()
         self.icon = IconBar()
         for engine, win in self.icon.windows.items():
             win.clicked.connect(lambda e=engine: self.on_icon_clicked(e))
         self.settings = settings.load()
+        self.gate.require_shift = self.settings["trigger"] == "shift"
         self.popup = PopupWindow(self.settings["font_px"])
         self.bridge = Bridge()
         self.bridge.selection.connect(self.on_selection)
@@ -102,7 +103,7 @@ class App:
         self.watchdog.timeout.connect(self.check_hook)
 
         self.tray = QSystemTrayIcon(QIcon(_tray_pixmap()))
-        self.tray.setToolTip("Claude CLI Translate - hold Shift while dragging to select")
+        self.tray.setToolTip("Claude CLI Translate - select text with the mouse, then click the icon")
         menu = QMenu()
         self._enable_action = QAction("Enabled", menu)
         self._enable_action.setCheckable(True)
@@ -121,6 +122,10 @@ class App:
         self._scope_group = self._radio_menu(
             scope_menu, [("terminals", "Terminals only (allowlist)"), ("all", "All applications")],
             self.settings["scope"], self.set_scope)
+        trigger_menu = settings_menu.addMenu("Trigger")
+        self._trigger_group = self._radio_menu(
+            trigger_menu, [("any", "Any mouse drag"), ("shift", "Shift+drag only")],
+            self.settings["trigger"], self.set_trigger)
         font_menu = settings_menu.addMenu("Font size")
         self._font_group = self._radio_menu(
             font_menu, [(px, "%s (%d px)" % (label, px)) for px, label in settings.FONT_SIZES],
@@ -193,6 +198,13 @@ class App:
         self._save()
         log.info("scope set to %s", self.settings["scope"])
 
+    def set_trigger(self, trigger: str) -> None:
+        self.settings["trigger"] = trigger if trigger in settings.TRIGGERS else "any"
+        self.gate.require_shift = self.settings["trigger"] == "shift"
+        self.gate.reset()
+        self._save()
+        log.info("trigger set to %s", self.settings["trigger"])
+
     def set_autostart(self, enabled: bool) -> None:
         if not autostart.set_enabled(bool(enabled)):
             actual = autostart.is_enabled()  # registry write failed: show the real state again
@@ -260,7 +272,7 @@ class App:
         self.tray.show()
         if not self.settings["first_run_done"]:
             self.tray.showMessage("Claude CLI Translate",
-                                  "Hold Shift while dragging to select text, then click the icon to translate.")
+                                  "Select text with the mouse, then click the icon to translate.")
             self.settings["first_run_done"] = True
             settings.save(self.settings)
         log.info("started; scope=%s allowlist=%s lang=%s proxy_mode=%s enabled=%s", self.settings["scope"],

@@ -55,7 +55,7 @@ def test_defaults_are_complete_and_independent():
 
 def test_full_roundtrip(tmp_path):
     p = str(tmp_path / "s.json")
-    custom = {"font_px": 19, "target_lang": "de", "scope": "all", "enabled": False,
+    custom = {"font_px": 19, "target_lang": "de", "scope": "all", "trigger": "shift", "enabled": False,
               "proxy_mode": "system", "allowlist": ["wt.exe", "code.exe"],
               "allowlist_classes": ["consolewindowclass", "myclass"], "first_run_done": True,
               "writer_src": "de", "writer_dst": "fr", "writer_font_in": 13, "writer_font_out": 23,
@@ -157,3 +157,9 @@ def test_glm_env_base_url_follows_the_region():
     assert settings.glm_env_base_url({"ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic"}) == settings.DEFAULT_GLM_BASE_URL
     assert settings.glm_env_base_url({"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic"}) == (
         "https://open.bigmodel.cn/api/paas/v4")
+
+
+def test_trigger_setting():
+    assert settings.normalize(None)["trigger"] == "any"
+    assert settings.normalize({"trigger": "shift"})["trigger"] == "shift"
+    assert settings.normalize({"trigger": "bogus"})["trigger"] == "any"

@@ -26,6 +26,7 @@ LANGUAGES = (("ru", "Russian"), ("en", "English"), ("de", "German"), ("fr", "Fre
              ("pl", "Polish"), ("tr", "Turkish"), ("zh-CN", "Chinese (Simplified)"),
              ("ja", "Japanese"), ("ko", "Korean"))
 SCOPES = ("terminals", "all")
+TRIGGERS = ("any", "shift")  # which mouse drags start a translation: any left-button drag, or only Shift+drag
 PROXY_MODES = ("auto", "direct", "system")
 DEFAULT_ALLOWLIST = ("windowsterminal.exe",)
 # Classic console windows report their SHELL as the owning process (cmd.exe, powershell.exe, ...), so they
@@ -51,6 +52,7 @@ DEFAULTS = {
     "font_px": DEFAULT_FONT_PX,
     "target_lang": "ru",
     "scope": "terminals",
+    "trigger": "any",
     "enabled": True,
     "proxy_mode": "auto",
     "allowlist": list(DEFAULT_ALLOWLIST),
@@ -149,6 +151,8 @@ def normalize(data) -> dict:
         out["target_lang"] = valid_lang(data["target_lang"])
     if data.get("scope") in SCOPES:
         out["scope"] = data["scope"]
+    if data.get("trigger") in TRIGGERS:
+        out["trigger"] = data["trigger"]
     if data.get("proxy_mode") in PROXY_MODES:
         out["proxy_mode"] = data["proxy_mode"]
     if "allowlist" in data:

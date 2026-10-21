@@ -1,7 +1,6 @@
 """Static constants. User-changeable options (language, scope, allowlist, proxy_mode, ...) live in cct.settings."""
 
 ALLOWLIST = frozenset({"windowsterminal.exe"})  # fallback only; the live allowlist is in settings.json
-REQUIRE_SHIFT = True
 MIN_DRAG_PX = 4
 ICON_SIZE = 40  # logical px at 100% DPI
 ICON_OFFSET = 10  # logical px from the mouse-up point
