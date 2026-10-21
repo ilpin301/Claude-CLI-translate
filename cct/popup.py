@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QPushButton, Q
 
 from . import config, settings, winutil
 from .geometry import clamp_rect, point_in_rect
-from .icon import (ENGINE_COLORS, GOOGLE, GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+from .icon import (BAR_COLORS, GOOGLE, GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
                    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, user32)
 
 _MARGIN = 10
@@ -75,7 +75,7 @@ class _TitleBar(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.color = QColor(ENGINE_COLORS[GOOGLE])
+        self.color = QColor(BAR_COLORS[GOOGLE])
         self.setCursor(Qt.SizeAllCursor)
 
     def paintEvent(self, _event) -> None:
@@ -175,8 +175,8 @@ class PopupWindow(QWidget):
 
     def show_loading(self, px: int, py: int, target: str, engine: str = "", color: str = "") -> None:
         """engine: short name of the translation engine, shown after the languages in the title bar;
-        color: the title bar colour (the engine's icon colour)."""
-        self._bar.color = QColor(color or ENGINE_COLORS[GOOGLE])
+        color: the title bar colour (BAR_COLORS of the engine)."""
+        self._bar.color = QColor(color or BAR_COLORS[GOOGLE])
         self._bar.update()
         if (px, py) != self._anchor or not self.isVisible():  # same selection and still open (the other engine's
             # icon): keep a dragged position

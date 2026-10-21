@@ -33,6 +33,7 @@ SWP_SHOWWINDOW = 0x0040
 GOOGLE = "google"
 GLM = "glm"
 ENGINE_COLORS = {GOOGLE: "#2d6cdf", GLM: "#6a4bd8"}
+BAR_COLORS = {GOOGLE: "#3e5c86", GLM: "#5a4d86"}  # muted versions of the same colours, for the popup title bar
 _TIPS = {GOOGLE: "Translate with Google", GLM: "Translate with GLM"}
 ICON_GAP = 6  # logical px between the icons
 
