@@ -6,6 +6,7 @@ file can never break start-up. Writes are atomic.
 import json
 import logging
 import os
+import re
 import tempfile
 
 log = logging.getLogger("cct.settings")
@@ -30,11 +31,12 @@ DEFAULT_ALLOWLIST = ("windowsterminal.exe",)
 # are matched by window class instead. Measured with tools/probe_host.py.
 DEFAULT_CLASSES = ("consolewindowclass",)
 
-# Claude models offered for the Claude icon: (API model id, short name). Cheapest / fastest first.
-CLAUDE_MODELS = (("claude-haiku-5-5", "Haiku 5.5 (fast, cheapest)"),
-                 ("claude-sonnet-5-5", "Sonnet 5.5 (better)"),
-                 ("claude-opus-5-5", "Opus 5.5 (best)"))
-DEFAULT_CLAUDE_MODEL = CLAUDE_MODELS[0][0]
+# GLM models offered for the GLM icon: (API model id, label). The Flash models are free at Z.ai.
+GLM_MODELS = (("glm-4.7-flash", "GLM-4.7-Flash (free, fast)"),
+              ("glm-4.5-flash", "GLM-4.5-Flash (free)"),
+              ("glm-4.7", "GLM-4.7 (best, paid)"))
+DEFAULT_GLM_MODEL = GLM_MODELS[0][0]
+DEFAULT_GLM_BASE_URL = "https://api.z.ai/api/paas/v4"  # China-region keys: https://open.bigmodel.cn/api/paas/v4
 MAX_KEY_CHARS = 300
 
 AUTO_LANG = "auto"  # source language "detect automatically" (Write / Paste window only)
@@ -48,10 +50,11 @@ DEFAULTS = {
     "allowlist": list(DEFAULT_ALLOWLIST),
     "allowlist_classes": list(DEFAULT_CLASSES),
     "first_run_done": False,
-    # Claude translation engine (second floating icon)
-    "claude_icon": True,
-    "claude_model": DEFAULT_CLAUDE_MODEL,
-    "claude_api_key": "",  # optional; ANTHROPIC_API_KEY in the environment is used when this is empty
+    # GLM translation engine (second floating icon)
+    "glm_icon": True,
+    "glm_model": DEFAULT_GLM_MODEL,  # any model id is accepted (edit settings.json); the tray lists GLM_MODELS
+    "glm_base_url": DEFAULT_GLM_BASE_URL,
+    "glm_api_key": "",  # optional; ZAI_API_KEY in the environment is used when this is empty
     # Write / Paste window
     "writer_src": AUTO_LANG,
     "writer_dst": "en",
@@ -132,11 +135,15 @@ def normalize(data) -> dict:
     for key in ("writer_font_in", "writer_font_out"):
         if key in data:
             out[key] = snap_font(data[key])
-    if data.get("claude_model") in dict(CLAUDE_MODELS):
-        out["claude_model"] = data["claude_model"]
-    if isinstance(data.get("claude_api_key"), str):
-        out["claude_api_key"] = data["claude_api_key"].strip()[:MAX_KEY_CHARS]
-    for key in ("enabled", "first_run_done", "claude_icon"):
+    model = data.get("glm_model")
+    if isinstance(model, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,40}", model.strip()):
+        out["glm_model"] = model.strip()
+    url = data.get("glm_base_url")
+    if isinstance(url, str) and re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?", url.strip()):
+        out["glm_base_url"] = url.strip().rstrip("/")
+    if isinstance(data.get("glm_api_key"), str):
+        out["glm_api_key"] = data["glm_api_key"].strip()[:MAX_KEY_CHARS]
+    for key in ("enabled", "first_run_done", "glm_icon"):
         if isinstance(data.get(key), bool):
             out[key] = data[key]
     return out

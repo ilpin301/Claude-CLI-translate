@@ -1,4 +1,4 @@
-"""Non-activating translate icons (Google and Claude, side by side) placed in physical pixels with SetWindowPos.
+"""Non-activating translate icons (Google and GLM, side by side) placed in physical pixels with SetWindowPos.
 
 Each icon is its own small window, so one can be clicked or dismissed (left click = translate with that
 engine, right click = dismiss) while the other stays where it is.
@@ -7,7 +7,7 @@ import ctypes
 from ctypes import wintypes
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import QWidget
 
 from . import config, winutil
@@ -31,9 +31,9 @@ SWP_SHOWWINDOW = 0x0040
 
 
 GOOGLE = "google"
-CLAUDE = "claude"
-_COLORS = {GOOGLE: "#2d6cdf", CLAUDE: "#d97757"}
-_TIPS = {GOOGLE: "Translate with Google", CLAUDE: "Translate with Claude"}
+GLM = "glm"
+_COLORS = {GOOGLE: "#2d6cdf", GLM: "#6a4bd8"}
+_TIPS = {GOOGLE: "Translate with Google", GLM: "Translate with GLM"}
 ICON_GAP = 6  # logical px between the icons
 
 
@@ -86,8 +86,8 @@ class IconWindow(QWidget):
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(_COLORS[self.engine]))
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 5, 5)
-        if self.engine == CLAUDE:
-            self._paint_burst(painter)
+        if self.engine == GLM:
+            self._paint_label(painter)
             return
         painter.setPen(QColor("white"))
         font = QFont("Segoe UI")
@@ -96,25 +96,23 @@ class IconWindow(QWidget):
         painter.setFont(font)
         painter.drawText(self.rect(), Qt.AlignCenter, "A文")
 
-    def _paint_burst(self, painter: QPainter) -> None:
-        """White multi-spoke star (Claude-like mark) in the middle of the icon."""
-        center = self.rect().center()
-        reach = self.height() * 0.30
-        painter.setPen(QPen(QColor("white"), max(2.0, self.height() * 0.075), Qt.SolidLine, Qt.RoundCap))
-        painter.translate(center.x() + 0.5, center.y() + 0.5)
-        for i in range(8):
-            painter.drawLine(0, 0, 0, round(-reach if i % 2 == 0 else -reach * 0.8))
-            painter.rotate(45)
+    def _paint_label(self, painter: QPainter) -> None:
+        painter.setPen(QColor("white"))
+        font = QFont("Segoe UI")
+        font.setPixelSize(round(self.height() * 0.32))
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(self.rect(), Qt.AlignCenter, "GLM")
 
 
 class IconBar:
     """Both icons next to the selection point; either can be dismissed or used independently."""
 
     def __init__(self):
-        self.windows = {GOOGLE: IconWindow(GOOGLE), CLAUDE: IconWindow(CLAUDE)}
+        self.windows = {GOOGLE: IconWindow(GOOGLE), GLM: IconWindow(GLM)}
 
     def show_near(self, px: int, py: int, engines) -> None:
-        engines = [name for name in (GOOGLE, CLAUDE) if name in engines]
+        engines = [name for name in (GOOGLE, GLM) if name in engines]
         work, scale = winutil.monitor_at(px, py)
         size = round(config.ICON_SIZE * scale)
         gap = round(ICON_GAP * scale)

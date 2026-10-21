@@ -1,7 +1,7 @@
 """Phase P2 app: mouse hook + Shift gating -> UIA read -> normalise -> icons -> click -> translate -> popup.
 
 Flow: a Shift+drag trigger in an allowlisted window asks the UIA worker (cct.uia) for the selection;
-a non-empty result is normalised and the icons appear (Google, and Claude unless switched off). Nothing
+a non-empty result is normalised and the icons appear (Google, and GLM unless switched off). Nothing
 is translated or sent until an icon is clicked; then the stored text is translated on that engine's
 worker thread and the popup shows the result. The other icon stays until it is clicked or dismissed. Worker threads reach the GUI thread only through Qt signals. A mouse-down outside the popup
 (and not on the icon) closes it, a new selection closes it, a mouse-down inside it is not a selection.
@@ -20,8 +20,8 @@ from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit, QMenu, QSys
 
 from . import autostart, config, settings, singleton, winutil
 from .gating import WM_LBUTTONDOWN, WM_LBUTTONUP, Gate
-from .claude import ClaudeTranslator
-from .icon import CLAUDE, GOOGLE, IconBar
+from .glm import GlmTranslator
+from .icon import GLM, GOOGLE, IconBar
 from .normalize import normalize
 from .popup import PopupWindow
 from .translate import GoogleTranslator, TranslateError
@@ -78,10 +78,11 @@ class App:
         self.translator = GoogleTranslator(self.settings["proxy_mode"])  # also used by the Write / Paste window
         self.translators = {
             GOOGLE: self.translator,
-            CLAUDE: ClaudeTranslator(self.claude_key, self.settings["proxy_mode"], self.settings["claude_model"])}
-        # one worker per engine, so a slow Google retry never delays a Claude click (and vice versa)
+            GLM: GlmTranslator(self.glm_key, self.settings["proxy_mode"], self.settings["glm_model"],
+                               self.settings["glm_base_url"])}
+        # one worker per engine, so a slow Google retry never delays a GLM click (and vice versa)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cct-translate")
-        self.claude_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cct-claude")
+        self.glm_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cct-glm")
         self._req_id = 0  # bumped by every new selection and every outside mouse-down; stale reads are dropped
         self._tr_id = 0  # bumped by every popup translation (and with _req_id); stale translations are dropped
         self._engine = GOOGLE  # engine of the popup's current translation
@@ -130,26 +131,26 @@ class App:
         self._autostart_action.setChecked(autostart.is_enabled())
         self._autostart_action.toggled.connect(self.set_autostart)
         settings_menu.addAction(self._autostart_action)
-        claude_menu = settings_menu.addMenu("Claude")
-        self._claude_icon_action = QAction("Show Claude icon", claude_menu)
-        self._claude_icon_action.setCheckable(True)
-        self._claude_icon_action.setChecked(self.settings["claude_icon"])
-        self._claude_icon_action.toggled.connect(self.set_claude_icon)
-        claude_menu.addAction(self._claude_icon_action)
-        model_menu = claude_menu.addMenu("Model")
-        self._model_group = self._radio_menu(model_menu, list(settings.CLAUDE_MODELS),
-                                             self.settings["claude_model"], self.set_claude_model)
-        self._key_status = QAction("", claude_menu)
+        glm_menu = settings_menu.addMenu("GLM")
+        self._glm_icon_action = QAction("Show GLM icon", glm_menu)
+        self._glm_icon_action.setCheckable(True)
+        self._glm_icon_action.setChecked(self.settings["glm_icon"])
+        self._glm_icon_action.toggled.connect(self.set_glm_icon)
+        glm_menu.addAction(self._glm_icon_action)
+        model_menu = glm_menu.addMenu("Model")
+        self._model_group = self._radio_menu(model_menu, list(settings.GLM_MODELS),
+                                             self.settings["glm_model"], self.set_glm_model)
+        self._key_status = QAction("", glm_menu)
         self._key_status.setEnabled(False)
-        claude_menu.addAction(self._key_status)
-        key_action = QAction("Set API key...", claude_menu)
-        key_action.triggered.connect(self.ask_claude_key)
-        claude_menu.addAction(key_action)
-        self._remove_key_action = QAction("Remove saved API key", claude_menu)
-        self._remove_key_action.triggered.connect(self.remove_claude_key)
-        claude_menu.addAction(self._remove_key_action)
-        claude_menu.aboutToShow.connect(self._refresh_claude_menu)
-        self._refresh_claude_menu()
+        glm_menu.addAction(self._key_status)
+        key_action = QAction("Set API key...", glm_menu)
+        key_action.triggered.connect(self.ask_glm_key)
+        glm_menu.addAction(key_action)
+        self._remove_key_action = QAction("Remove saved API key", glm_menu)
+        self._remove_key_action.triggered.connect(self.remove_glm_key)
+        glm_menu.addAction(self._remove_key_action)
+        glm_menu.aboutToShow.connect(self._refresh_glm_menu)
+        self._refresh_glm_menu()
         menu.addSeparator()
         quit_action = QAction("Quit", menu)
         quit_action.triggered.connect(self.quit)
@@ -201,49 +202,48 @@ class App:
             self._autostart_action.blockSignals(False)
             self.tray.showMessage("Claude CLI Translate", "Could not change the start-up setting.")
 
-    def claude_key(self) -> str:
-        """Saved key first, else the ANTHROPIC_API_KEY environment variable. Never logged."""
-        return self.settings["claude_api_key"] or os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    def glm_key(self) -> str:
+        """Saved key first, else the ZAI_API_KEY environment variable. Never logged."""
+        return self.settings["glm_api_key"] or os.environ.get("ZAI_API_KEY", "").strip()
 
-    def _refresh_claude_menu(self) -> None:
-        if self.settings["claude_api_key"]:
+    def _refresh_glm_menu(self) -> None:
+        if self.settings["glm_api_key"]:
             status = "API key: saved"
-        elif os.environ.get("ANTHROPIC_API_KEY", "").strip():
-            status = "API key: from ANTHROPIC_API_KEY"
+        elif os.environ.get("ZAI_API_KEY", "").strip():
+            status = "API key: from ZAI_API_KEY"
         else:
             status = "API key: not set"
         self._key_status.setText(status)
-        self._remove_key_action.setEnabled(bool(self.settings["claude_api_key"]))
+        self._remove_key_action.setEnabled(bool(self.settings["glm_api_key"]))
 
-    def set_claude_icon(self, enabled: bool) -> None:
-        self.settings["claude_icon"] = bool(enabled)
+    def set_glm_icon(self, enabled: bool) -> None:
+        self.settings["glm_icon"] = bool(enabled)
         if not enabled:
-            self.icon.hide_icon(CLAUDE)
+            self.icon.hide_icon(GLM)
         self._save()
 
-    def set_claude_model(self, model: str) -> None:
-        if model in dict(settings.CLAUDE_MODELS):
-            self.settings["claude_model"] = model
-            self.translators[CLAUDE].model = model
-            self._save()
-            log.info("claude model set to %s", model)
+    def set_glm_model(self, model: str) -> None:
+        self.settings["glm_model"] = model
+        self.translators[GLM].model = model
+        self._save()
+        log.info("glm model set to %s", model)
 
-    def ask_claude_key(self) -> None:
+    def ask_glm_key(self) -> None:
         dialog = QInputDialog()
-        dialog.setWindowTitle("Claude API key")
-        dialog.setLabelText("Paste your Anthropic API key (sk-ant-...).\n"
-                            "It is stored in your settings.json (or set the ANTHROPIC_API_KEY variable instead).")
+        dialog.setWindowTitle("GLM API key")
+        dialog.setLabelText("Paste your Z.ai (GLM) API key.\n"
+                            "It is stored in your settings.json (or set the ZAI_API_KEY variable instead).")
         dialog.setTextEchoMode(QLineEdit.Password)
         dialog.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         if dialog.exec() and dialog.textValue().strip():
-            self.settings["claude_api_key"] = dialog.textValue().strip()[:settings.MAX_KEY_CHARS]
+            self.settings["glm_api_key"] = dialog.textValue().strip()[:settings.MAX_KEY_CHARS]
             self._save()
-            self._refresh_claude_menu()
+            self._refresh_glm_menu()
 
-    def remove_claude_key(self) -> None:
-        self.settings["claude_api_key"] = ""
+    def remove_glm_key(self) -> None:
+        self.settings["glm_api_key"] = ""
         self._save()
-        self._refresh_claude_menu()
+        self._refresh_glm_menu()
 
     def window_allowed(self, exe: str, window_class: str) -> bool:
         return settings.window_allowed(exe, window_class, self.settings)
@@ -272,7 +272,7 @@ class App:
         self.writer.close()
         self.worker.stop()
         self.executor.shutdown(wait=False, cancel_futures=True)
-        self.claude_executor.shutdown(wait=False, cancel_futures=True)
+        self.glm_executor.shutdown(wait=False, cancel_futures=True)
         self.hook.stop()
         self.tray.hide()
         self.qapp.quit()
@@ -325,7 +325,7 @@ class App:
             return
         self._text, self._truncated = norm, truncated
         log.info("selection ready len=%d truncated=%s", len(norm), truncated)
-        engines = [GOOGLE, CLAUDE] if self.settings["claude_icon"] else [GOOGLE]
+        engines = [GOOGLE, GLM] if self.settings["glm_icon"] else [GOOGLE]
         self.icon.show_near(*self._trigger_pt, engines)
 
     def on_icon_clicked(self, engine: str) -> None:
@@ -345,13 +345,14 @@ class App:
 
     def _start_translation(self) -> None:
         self._tr_id += 1  # an answer still on its way from the other engine is now stale
-        name = "Google" if self._engine == GOOGLE else "Claude " + self._claude_model_name()
+        name = "Google" if self._engine == GOOGLE else self._glm_model_name()
         self.popup.show_loading(*self._trigger_pt, self._result_lang, name)
-        pool = self.executor if self._engine == GOOGLE else self.claude_executor
+        pool = self.executor if self._engine == GOOGLE else self.glm_executor
         pool.submit(self._translate, self._tr_id, self._engine, self._text, self._result_lang)
 
-    def _claude_model_name(self) -> str:
-        return dict(settings.CLAUDE_MODELS).get(self.settings["claude_model"], "").split(" (")[0]
+    def _glm_model_name(self) -> str:
+        model = self.settings["glm_model"]
+        return dict(settings.GLM_MODELS).get(model, model).split(" (")[0]
 
     def _translate(self, tr_id: int, engine: str, text: str, lang: str) -> None:  # runs on an engine's worker thread
         try:
