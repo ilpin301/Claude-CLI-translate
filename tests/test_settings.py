@@ -55,7 +55,7 @@ def test_defaults_are_complete_and_independent():
 
 def test_full_roundtrip(tmp_path):
     p = str(tmp_path / "s.json")
-    custom = {"font_px": 19, "target_lang": "de", "scope": "all", "trigger": "shift", "enabled": False,
+    custom = {"font_px": 19, "target_lang": "de", "scope": "all", "trigger": "shift", "clipboard_fallback": False, "enabled": False,
               "proxy_mode": "system", "allowlist": ["wt.exe", "code.exe"],
               "allowlist_classes": ["consolewindowclass", "myclass"], "first_run_done": True,
               "writer_src": "de", "writer_dst": "fr", "writer_font_in": 13, "writer_font_out": 23,
@@ -163,3 +163,9 @@ def test_trigger_setting():
     assert settings.normalize(None)["trigger"] == "any"
     assert settings.normalize({"trigger": "shift"})["trigger"] == "shift"
     assert settings.normalize({"trigger": "bogus"})["trigger"] == "any"
+
+
+def test_clipboard_fallback_setting():
+    assert settings.normalize(None)["clipboard_fallback"] is True
+    assert settings.normalize({"clipboard_fallback": False})["clipboard_fallback"] is False
+    assert settings.normalize({"clipboard_fallback": "no"})["clipboard_fallback"] is True

@@ -91,6 +91,7 @@ class App:
         self._truncated = False
         self._result_lang = self.settings["target_lang"]
         self._ignore_up = False
+        self._clip_seq = None  # clipboard sequence number at the last mouse-down (None: fallback off)
         self._last_cursor = winutil.cursor_pos()
         self._last_count = 0
         self._stale = 0
@@ -126,6 +127,11 @@ class App:
         self._trigger_group = self._radio_menu(
             trigger_menu, [("any", "Any mouse drag"), ("shift", "Shift+drag only")],
             self.settings["trigger"], self.set_trigger)
+        self._clip_action = QAction("Plain drag in Claude Code (read its auto-copy)", settings_menu)
+        self._clip_action.setCheckable(True)
+        self._clip_action.setChecked(self.settings["clipboard_fallback"])
+        self._clip_action.toggled.connect(self.set_clipboard_fallback)
+        settings_menu.addAction(self._clip_action)
         font_menu = settings_menu.addMenu("Font size")
         self._font_group = self._radio_menu(
             font_menu, [(px, "%s (%d px)" % (label, px)) for px, label in settings.FONT_SIZES],
@@ -204,6 +210,11 @@ class App:
         self.gate.reset()
         self._save()
         log.info("trigger set to %s", self.settings["trigger"])
+
+    def set_clipboard_fallback(self, enabled: bool) -> None:
+        self.settings["clipboard_fallback"] = bool(enabled)
+        self._save()
+        log.info("clipboard fallback=%s", enabled)
 
     def set_autostart(self, enabled: bool) -> None:
         if not autostart.set_enabled(bool(enabled)):
@@ -309,6 +320,7 @@ class App:
                 self._ignore_up = True  # the popup / icon / writer window handle their own clicks
                 return
             self._ignore_up = False
+            self._clip_seq = winutil.clipboard_seq() if self.settings["clipboard_fallback"] else None
             self._req_id += 1  # invalidates any pending read or translation
             self._tr_id += 1
             self.popup.hide_popup()
@@ -330,7 +342,7 @@ class App:
         self._trigger_pt = (trigger.x, trigger.y)
         self._text = None
         self.icon.hide_icon()  # the old icon belongs to the previous selection; a new one appears if this read succeeds
-        self.worker.request(self._req_id)
+        self.worker.request(self._req_id, clip_seq=self._clip_seq)
 
     def on_selection(self, req_id: int, text) -> None:
         if req_id != self._req_id:

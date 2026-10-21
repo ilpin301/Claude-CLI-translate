@@ -53,6 +53,7 @@ DEFAULTS = {
     "target_lang": "ru",
     "scope": "terminals",
     "trigger": "any",
+    "clipboard_fallback": True,  # plain drag in Claude Code: read the terminal's own auto-copy (see cct.clip)
     "enabled": True,
     "proxy_mode": "auto",
     "allowlist": list(DEFAULT_ALLOWLIST),
@@ -175,7 +176,7 @@ def normalize(data) -> dict:
         out["glm_base_url"] = url.strip().rstrip("/")
     if isinstance(data.get("glm_api_key"), str):
         out["glm_api_key"] = data["glm_api_key"].strip()[:MAX_KEY_CHARS]
-    for key in ("enabled", "first_run_done", "glm_icon"):
+    for key in ("enabled", "first_run_done", "glm_icon", "clipboard_fallback"):
         if isinstance(data.get(key), bool):
             out[key] = data[key]
     return out
