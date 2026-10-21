@@ -48,6 +48,10 @@ def test_parse_reply_with_and_without_language_tag():
     assert parse_reply("<lang>zh-CN</lang>Hello") == ("Hello", "zh-CN")
     assert parse_reply("Just text") == ("Just text", "")
     assert parse_reply("<think>hmm</think>\n<lang>en</lang>\nHi") == ("Hi", "en")
+    assert parse_reply("de\nПривет\nмир\n") == ("Привет\nмир", "de")
+    assert parse_reply("zh-cn\nHello") == ("Hello", "zh-CN")
+    assert parse_reply("Hello\nworld") == ("Hello\nworld", "")
+    assert parse_reply("de") == ("de", "")
 
 
 def test_translate_ok_request_shape():

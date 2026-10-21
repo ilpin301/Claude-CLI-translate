@@ -24,6 +24,8 @@ log = logging.getLogger("cct.glm")
 MAX_OUTPUT_TOKENS = 8192
 TIMEOUT = (config.CONNECT_TIMEOUT_S, 60)  # (connect, read) seconds; a long translation can take a while
 _LANG_TAG = re.compile(r"^\s*<lang>\s*([A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?)\s*</lang>\s*")
+_BARE_LANG = re.compile(r"^\s*([A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})?)[ \t]*\n")
+_LANG_CODES = {code.lower(): code for code, _name in settings.LANGUAGES}
 _THINK = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 NO_BALANCE_CODES = frozenset({"1113", "1112"})  # "insufficient balance / no resource package" (sent with HTTP 429)
 
@@ -53,6 +55,9 @@ def parse_reply(text: str) -> tuple:
     match = _LANG_TAG.match(text)
     if match:
         return text[match.end():].strip("\n").rstrip(), match.group(1)
+    bare = _BARE_LANG.match(text)  # glm-4.7 drops the angle brackets
+    if bare and bare.group(1).lower() in _LANG_CODES:
+        return text[bare.end():].strip("\n").rstrip(), _LANG_CODES[bare.group(1).lower()]
     return text.strip(), ""
 
 
