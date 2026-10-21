@@ -30,6 +30,13 @@ DEFAULT_ALLOWLIST = ("windowsterminal.exe",)
 # are matched by window class instead. Measured with tools/probe_host.py.
 DEFAULT_CLASSES = ("consolewindowclass",)
 
+# Claude models offered for the Claude icon: (API model id, short name). Cheapest / fastest first.
+CLAUDE_MODELS = (("claude-haiku-5-5", "Haiku 5.5 (fast, cheapest)"),
+                 ("claude-sonnet-5-5", "Sonnet 5.5 (better)"),
+                 ("claude-opus-5-5", "Opus 5.5 (best)"))
+DEFAULT_CLAUDE_MODEL = CLAUDE_MODELS[0][0]
+MAX_KEY_CHARS = 300
+
 AUTO_LANG = "auto"  # source language "detect automatically" (Write / Paste window only)
 
 DEFAULTS = {
@@ -41,6 +48,10 @@ DEFAULTS = {
     "allowlist": list(DEFAULT_ALLOWLIST),
     "allowlist_classes": list(DEFAULT_CLASSES),
     "first_run_done": False,
+    # Claude translation engine (second floating icon)
+    "claude_icon": True,
+    "claude_model": DEFAULT_CLAUDE_MODEL,
+    "claude_api_key": "",  # optional; ANTHROPIC_API_KEY in the environment is used when this is empty
     # Write / Paste window
     "writer_src": AUTO_LANG,
     "writer_dst": "en",
@@ -121,7 +132,11 @@ def normalize(data) -> dict:
     for key in ("writer_font_in", "writer_font_out"):
         if key in data:
             out[key] = snap_font(data[key])
-    for key in ("enabled", "first_run_done"):
+    if data.get("claude_model") in dict(CLAUDE_MODELS):
+        out["claude_model"] = data["claude_model"]
+    if isinstance(data.get("claude_api_key"), str):
+        out["claude_api_key"] = data["claude_api_key"].strip()[:MAX_KEY_CHARS]
+    for key in ("enabled", "first_run_done", "claude_icon"):
         if isinstance(data.get(key), bool):
             out[key] = data[key]
     return out

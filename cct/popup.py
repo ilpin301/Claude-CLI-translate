@@ -83,6 +83,7 @@ class PopupWindow(QWidget):
         self._anchor = (0, 0)
         self._translation = ""
         self._manual = None  # QSize chosen by the user (manual mode) or None (automatic size)
+        self._engine = ""  # engine name shown in the header
         self._moved = False  # the user dragged this popup: keep its position when the content changes
         self._drag = None  # offset of the mouse inside the window while dragging
         self._last = ("", "", "", False, False)  # arguments of the last _set_content, for reset_size()
@@ -147,11 +148,18 @@ class PopupWindow(QWidget):
         self._manual = None  # the remembered size was for the old font
         self._auto_limits()
 
-    def show_loading(self, px: int, py: int, target: str) -> None:
+    def show_loading(self, px: int, py: int, target: str, engine: str = "") -> None:
+        """engine: short name of the translation engine, shown after the languages in the header."""
+        if (px, py) != self._anchor or not self.isVisible():  # same selection and still open (the other engine's
+            # icon): keep a dragged position
+            self._moved = False
         self._anchor = (px, py)
-        self._moved = False
+        self._engine = engine
         self._translation = ""
-        self._set_content("auto → %s" % target, "Translating…", "", copy=False)
+        self._set_content(self._head("auto", target), "Translating…", "", copy=False)
+
+    def _head(self, source: str, target: str) -> str:
+        return "%s → %s%s" % (source, target, " · " + self._engine if self._engine else "")
 
     def show_result(self, result, truncated: bool, target: str) -> None:
         notes = []
@@ -160,8 +168,7 @@ class PopupWindow(QWidget):
         if truncated:
             notes.append("Text was truncated to %d characters." % config.MAX_CHARS)
         self._translation = result.text
-        self._set_content("%s → %s" % (result.detected_lang or "auto", target),
-                          result.text, " ".join(notes), copy=True)
+        self._set_content(self._head(result.detected_lang or "auto", target), result.text, " ".join(notes), copy=True)
 
     def show_error(self, msg: str, retry: bool = False) -> None:
         self._translation = ""

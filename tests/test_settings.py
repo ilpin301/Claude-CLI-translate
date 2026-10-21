@@ -58,7 +58,8 @@ def test_full_roundtrip(tmp_path):
     custom = {"font_px": 19, "target_lang": "de", "scope": "all", "enabled": False,
               "proxy_mode": "system", "allowlist": ["wt.exe", "code.exe"],
               "allowlist_classes": ["consolewindowclass", "myclass"], "first_run_done": True,
-              "writer_src": "de", "writer_dst": "fr", "writer_font_in": 13, "writer_font_out": 23}
+              "writer_src": "de", "writer_dst": "fr", "writer_font_in": 13, "writer_font_out": 23,
+              "claude_icon": False, "claude_model": "claude-opus-5-5", "claude_api_key": "sk-ant-test"}
     settings.save(custom, p)
     assert settings.load(p) == custom
 
@@ -116,3 +117,16 @@ def test_writer_defaults_and_validation():
     assert settings.normalize({"writer_src": "AUTO"})["writer_src"] == "auto"
     assert settings.normalize({"writer_src": "klingon"})["writer_src"] == "auto"
     assert settings.normalize({"writer_src": 5})["writer_src"] == "auto"
+
+
+def test_claude_settings_defaults_and_validation():
+    d = settings.normalize(None)
+    assert d["claude_icon"] is True and d["claude_api_key"] == ""
+    assert d["claude_model"] == settings.DEFAULT_CLAUDE_MODEL
+    out = settings.normalize({"claude_model": "claude-sonnet-5-5", "claude_icon": False,
+                              "claude_api_key": "  sk-ant-x  "})
+    assert (out["claude_model"], out["claude_icon"], out["claude_api_key"]) == ("claude-sonnet-5-5", False, "sk-ant-x")
+    bad = settings.normalize({"claude_model": "gpt-4", "claude_icon": "yes", "claude_api_key": 5})
+    assert bad["claude_model"] == settings.DEFAULT_CLAUDE_MODEL and bad["claude_icon"] is True
+    assert bad["claude_api_key"] == ""
+    assert len(settings.normalize({"claude_api_key": "k" * 1000})["claude_api_key"]) == settings.MAX_KEY_CHARS
