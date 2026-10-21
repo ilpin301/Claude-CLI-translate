@@ -12,7 +12,7 @@ it (double-click the grip to go back to the automatic size). Both use plain Qt m
 coordinates), so no extra Win32 calls are involved. A size chosen by the user is kept for later popups
 until the font size changes; a position chosen by the user lasts only for the current popup.
 """
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtGui import QPainterPath, QPen
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout,
@@ -82,7 +82,7 @@ class _TitleBar(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         path = QPainterPath()
-        path.addRoundedRect(0, 0, self.width() - 1, self.height() + _RADIUS, _RADIUS, _RADIUS)
+        path.addRoundedRect(0, 0, self.width(), self.height() + _RADIUS, _RADIUS, _RADIUS)
         painter.setClipRect(self.rect())  # keep only the top part: rounded top corners, square bottom edge
         painter.fillPath(path, self.color)
 
@@ -310,6 +310,6 @@ class PopupWindow(QWidget):
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(Qt.NoPen)
+        painter.setPen(QPen(self._bar.color, 1))  # 1 px frame in the title bar colour
         painter.setBrush(QColor("#1f1f1f"))
-        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), _RADIUS, _RADIUS)
+        painter.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), _RADIUS, _RADIUS)
