@@ -32,7 +32,7 @@ SWP_SHOWWINDOW = 0x0040
 
 GOOGLE = "google"
 GLM = "glm"
-_COLORS = {GOOGLE: "#2d6cdf", GLM: "#6a4bd8"}
+ENGINE_COLORS = {GOOGLE: "#2d6cdf", GLM: "#6a4bd8"}
 _TIPS = {GOOGLE: "Translate with Google", GLM: "Translate with GLM"}
 ICON_GAP = 6  # logical px between the icons
 
@@ -84,7 +84,7 @@ class IconWindow(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor(_COLORS[self.engine]))
+        painter.setBrush(QColor(ENGINE_COLORS[self.engine]))
         painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 5, 5)
         if self.engine == GLM:
             self._paint_label(painter)

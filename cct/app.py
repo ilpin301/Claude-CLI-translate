@@ -20,7 +20,7 @@ from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit, QMenu, QSys
 from . import autostart, config, settings, singleton, winutil
 from .gating import WM_LBUTTONDOWN, WM_LBUTTONUP, Gate
 from .glm import GlmTranslator
-from .icon import GLM, GOOGLE, IconBar
+from .icon import ENGINE_COLORS, GLM, GOOGLE, IconBar
 from .normalize import normalize
 from .popup import PopupWindow
 from .translate import GoogleTranslator, TranslateError
@@ -350,7 +350,7 @@ class App:
     def _start_translation(self) -> None:
         self._tr_id += 1  # an answer still on its way from the other engine is now stale
         name = "Google" if self._engine == GOOGLE else self._glm_model_name()
-        self.popup.show_loading(*self._trigger_pt, self._result_lang, name)
+        self.popup.show_loading(*self._trigger_pt, self._result_lang, name, ENGINE_COLORS[self._engine])
         pool = self.executor if self._engine == GOOGLE else self.glm_executor
         pool.submit(self._translate, self._tr_id, self._engine, self._text, self._result_lang)
 

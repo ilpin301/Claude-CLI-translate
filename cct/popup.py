@@ -14,21 +14,23 @@ until the font size changes; a position chosen by the user lasts only for the cu
 """
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtGui import QPen
+from PySide6.QtGui import QPainterPath, QPen
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout,
                                QWidget)
 
 from . import config, settings, winutil
 from .geometry import clamp_rect, point_in_rect
-from .icon import (GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, WS_EX_NOACTIVATE,
-                   WS_EX_TOOLWINDOW, user32)
+from .icon import (ENGINE_COLORS, GOOGLE, GWL_EXSTYLE, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+                   WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, user32)
 
 _MARGIN = 10
 _MIN_W, _MIN_H = 220, 90  # smallest size the user can shrink the popup to
 _QT_MAX = 16777215  # QWIDGETSIZE_MAX
 _GRIP = 16
-_BTN_CSS = ("QPushButton{color:#ddd;background:#333;border:none;border-radius:4px;padding:2px 8px;}"
-            "QPushButton:hover{background:#444;}")
+_RADIUS = 8
+_BAR_PAD = 6  # title bar inner padding (logical px)
+_BTN_CSS = ("QPushButton{color:white;background:rgba(255,255,255,50);border:none;border-radius:4px;padding:2px 8px;}"
+            "QPushButton:hover{background:rgba(255,255,255,90);}")
 
 
 class _Grip(QWidget):
@@ -68,6 +70,23 @@ class _Grip(QWidget):
             painter.drawLine(_GRIP - 2, off, off, _GRIP - 2)
 
 
+class _TitleBar(QWidget):
+    """Coloured strip at the top of the popup (colour = engine); dragging it, or any other free spot, moves the popup."""
+
+    def __init__(self):
+        super().__init__()
+        self.color = QColor(ENGINE_COLORS[GOOGLE])
+        self.setCursor(Qt.SizeAllCursor)
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, self.width() - 1, self.height() + _RADIUS, _RADIUS, _RADIUS)
+        painter.setClipRect(self.rect())  # keep only the top part: rounded top corners, square bottom edge
+        painter.fillPath(path, self.color)
+
+
 class PopupWindow(QWidget):
     retry_requested = Signal()
 
@@ -89,7 +108,7 @@ class PopupWindow(QWidget):
         self._last = ("", "", "", False, False)  # arguments of the last _set_content, for reset_size()
 
         self._header = QLabel()
-        self._header.setStyleSheet("color:#9aa0a6;")
+        self._header.setStyleSheet("color:white;font-weight:bold;")
         self._copy = QPushButton("Copy")
         self._retry = QPushButton("Retry")
         self._close = QPushButton("✕")
@@ -100,7 +119,9 @@ class PopupWindow(QWidget):
         self._copy.clicked.connect(self._on_copy)
         self._retry.clicked.connect(self.retry_requested.emit)
         self._close.clicked.connect(self.hide_popup)
-        top = QHBoxLayout()
+        self._bar = _TitleBar()
+        top = QHBoxLayout(self._bar)
+        top.setContentsMargins(_MARGIN, _BAR_PAD, _BAR_PAD, _BAR_PAD)
         top.addWidget(self._header, 1)
         top.addWidget(self._copy)
         top.addWidget(self._retry)
@@ -119,12 +140,16 @@ class PopupWindow(QWidget):
         self._note = QLabel()
         self._note.setWordWrap(True)
 
+        content = QVBoxLayout()
+        content.setContentsMargins(_MARGIN, 8, _MARGIN, _MARGIN)
+        content.setSpacing(6)
+        content.addWidget(self._scroll)
+        content.addWidget(self._note)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(_MARGIN, _MARGIN, _MARGIN, _MARGIN)
-        lay.setSpacing(6)
-        lay.addLayout(top)
-        lay.addWidget(self._scroll)
-        lay.addWidget(self._note)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self._bar)
+        lay.addLayout(content)
 
         self._copy_timer = QTimer(self)
         self._copy_timer.setSingleShot(True)
@@ -148,8 +173,11 @@ class PopupWindow(QWidget):
         self._manual = None  # the remembered size was for the old font
         self._auto_limits()
 
-    def show_loading(self, px: int, py: int, target: str, engine: str = "") -> None:
-        """engine: short name of the translation engine, shown after the languages in the header."""
+    def show_loading(self, px: int, py: int, target: str, engine: str = "", color: str = "") -> None:
+        """engine: short name of the translation engine, shown after the languages in the title bar;
+        color: the title bar colour (the engine's icon colour)."""
+        self._bar.color = QColor(color or ENGINE_COLORS[GOOGLE])
+        self._bar.update()
         if (px, py) != self._anchor or not self.isVisible():  # same selection and still open (the other engine's
             # icon): keep a dragged position
             self._moved = False
@@ -284,4 +312,4 @@ class PopupWindow(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor("#1f1f1f"))
-        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), _RADIUS, _RADIUS)
