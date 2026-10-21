@@ -10,7 +10,6 @@ from . import uia  # noqa: F401  (must come first: sets sys.coinit_flags = 0 bef
 
 import logging
 import queue
-import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
@@ -79,7 +78,7 @@ class App:
         self.translators = {
             GOOGLE: self.translator,
             GLM: GlmTranslator(self.glm_key, self.settings["proxy_mode"], self.settings["glm_model"],
-                               self.settings["glm_base_url"])}
+                               self.glm_base_url())}
         # one worker per engine, so a slow Google retry never delays a GLM click (and vice versa)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cct-translate")
         self.glm_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cct-glm")
@@ -203,14 +202,19 @@ class App:
             self.tray.showMessage("Claude CLI Translate", "Could not change the start-up setting.")
 
     def glm_key(self) -> str:
-        """Saved key first, else the ZAI_API_KEY environment variable. Never logged."""
-        return self.settings["glm_api_key"] or os.environ.get("ZAI_API_KEY", "").strip()
+        """Saved key first, else a GLM key from the environment (see settings.glm_env_key). Never logged."""
+        return self.settings["glm_api_key"] or settings.glm_env_key()[1]
+
+    def glm_base_url(self) -> str:
+        """The settings.json value when the user changed it, else the region implied by the environment."""
+        url = self.settings["glm_base_url"]
+        return settings.glm_env_base_url() if url == settings.DEFAULT_GLM_BASE_URL else url
 
     def _refresh_glm_menu(self) -> None:
         if self.settings["glm_api_key"]:
             status = "API key: saved"
-        elif os.environ.get("ZAI_API_KEY", "").strip():
-            status = "API key: from ZAI_API_KEY"
+        elif settings.glm_env_key()[0]:
+            status = "API key: from %s" % settings.glm_env_key()[0]
         else:
             status = "API key: not set"
         self._key_status.setText(status)

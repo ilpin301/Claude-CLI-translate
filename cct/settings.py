@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import tempfile
+from urllib.parse import urlparse
 
 log = logging.getLogger("cct.settings")
 
@@ -38,6 +39,10 @@ GLM_MODELS = (("glm-4.7-flash", "GLM-4.7-Flash (free, fast)"),
 DEFAULT_GLM_MODEL = GLM_MODELS[0][0]
 DEFAULT_GLM_BASE_URL = "https://api.z.ai/api/paas/v4"  # China-region keys: https://open.bigmodel.cn/api/paas/v4
 MAX_KEY_CHARS = 300
+GLM_KEY_VARS = ("ZAI_API_KEY", "ZHIPUAI_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY")  # environment variables tried in order
+# Claude Code can be pointed at GLM (ANTHROPIC_BASE_URL on a Z.ai / bigmodel.cn host); only then are its token variables GLM keys.
+CLAUDE_CODE_KEY_VARS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
+GLM_HOSTS = ("z.ai", "bigmodel.cn")
 
 AUTO_LANG = "auto"  # source language "detect automatically" (Write / Paste window only)
 
@@ -61,6 +66,28 @@ DEFAULTS = {
     "writer_font_in": DEFAULT_FONT_PX,
     "writer_font_out": DEFAULT_FONT_PX,
 }
+
+
+def _glm_host(env) -> str:
+    host = (urlparse(env.get("ANTHROPIC_BASE_URL", "").strip()).hostname or "").lower()
+    return next((h for h in GLM_HOSTS if host == h or host.endswith("." + h)), "")
+
+
+def glm_env_key(env=None) -> tuple:
+    """(variable name, key) of a GLM key found in the environment, or ('', ''). Never sends or logs anything."""
+    env = os.environ if env is None else env
+    names = GLM_KEY_VARS + (CLAUDE_CODE_KEY_VARS if _glm_host(env) else ())
+    for name in names:
+        value = env.get(name, "").strip()
+        if value:
+            return name, value
+    return "", ""
+
+
+def glm_env_base_url(env=None) -> str:
+    """Default API base URL, switched to the China region when Claude Code is pointed at bigmodel.cn."""
+    env = os.environ if env is None else env
+    return "https://open.bigmodel.cn/api/paas/v4" if _glm_host(env) == "bigmodel.cn" else DEFAULT_GLM_BASE_URL
 
 
 def clamp_font(px) -> int:

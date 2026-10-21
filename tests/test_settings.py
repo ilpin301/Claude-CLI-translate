@@ -133,3 +133,27 @@ def test_glm_settings_defaults_and_validation():
     assert bad["glm_model"] == settings.DEFAULT_GLM_MODEL and bad["glm_icon"] is True
     assert bad["glm_api_key"] == "" and bad["glm_base_url"] == settings.DEFAULT_GLM_BASE_URL
     assert len(settings.normalize({"glm_api_key": "k" * 1000})["glm_api_key"]) == settings.MAX_KEY_CHARS
+
+
+def test_glm_key_from_environment():
+    assert settings.glm_env_key({}) == ("", "")
+    assert settings.glm_env_key({"ZAI_API_KEY": " k1 ", "GLM_API_KEY": "k2"}) == ("ZAI_API_KEY", "k1")
+    assert settings.glm_env_key({"GLM_API_KEY": "k2"}) == ("GLM_API_KEY", "k2")
+
+
+def test_claude_code_token_is_used_only_when_pointed_at_glm():
+    token = {"ANTHROPIC_AUTH_TOKEN": "tok"}
+    assert settings.glm_env_key(token) == ("", "")  # a real Anthropic key must never go to Z.ai
+    assert settings.glm_env_key(dict(token, ANTHROPIC_BASE_URL="https://api.anthropic.com")) == ("", "")
+    assert settings.glm_env_key(dict(token, ANTHROPIC_BASE_URL="https://evil-z.ai.example.com")) == ("", "")
+    assert settings.glm_env_key(dict(token, ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic")) == (
+        "ANTHROPIC_AUTH_TOKEN", "tok")
+    assert settings.glm_env_key({"ANTHROPIC_API_KEY": "k", "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic"}
+                                ) == ("ANTHROPIC_API_KEY", "k")
+
+
+def test_glm_env_base_url_follows_the_region():
+    assert settings.glm_env_base_url({}) == settings.DEFAULT_GLM_BASE_URL
+    assert settings.glm_env_base_url({"ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic"}) == settings.DEFAULT_GLM_BASE_URL
+    assert settings.glm_env_base_url({"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic"}) == (
+        "https://open.bigmodel.cn/api/paas/v4")
