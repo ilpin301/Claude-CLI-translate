@@ -6,7 +6,9 @@ file can never break start-up. Writes are atomic.
 import json
 import logging
 import os
+import re
 import tempfile
+from urllib.parse import urlparse
 
 log = logging.getLogger("cct.settings")
 
@@ -24,11 +26,25 @@ LANGUAGES = (("ru", "Russian"), ("en", "English"), ("de", "German"), ("fr", "Fre
              ("pl", "Polish"), ("tr", "Turkish"), ("zh-CN", "Chinese (Simplified)"),
              ("ja", "Japanese"), ("ko", "Korean"))
 SCOPES = ("terminals", "all")
+TRIGGERS = ("any", "shift")  # which mouse drags start a translation: any left-button drag, or only Shift+drag
 PROXY_MODES = ("auto", "direct", "system")
 DEFAULT_ALLOWLIST = ("windowsterminal.exe",)
 # Classic console windows report their SHELL as the owning process (cmd.exe, powershell.exe, ...), so they
 # are matched by window class instead. Measured with tools/probe_host.py.
 DEFAULT_CLASSES = ("consolewindowclass",)
+
+# GLM models offered for the GLM icon: (API model id, label). The 4.x Flash models are free at Z.ai; GLM-5.3-Flash needs a Z.ai plan or balance.
+GLM_MODELS = (("glm-4.7-flash", "GLM-4.7-Flash (free, fast)"),
+              ("glm-4.5-flash", "GLM-4.5-Flash (free)"),
+              ("glm-4.7", "GLM-4.7 (best, paid)"),
+              ("glm-5.3-flash", "GLM-5.3-Flash (Coding Plan, fast)"))
+DEFAULT_GLM_MODEL = GLM_MODELS[0][0]
+DEFAULT_GLM_BASE_URL = "https://api.z.ai/api/paas/v4"  # China-region keys: https://open.bigmodel.cn/api/paas/v4
+MAX_KEY_CHARS = 300
+GLM_KEY_VARS = ("ZAI_API_KEY", "ZHIPUAI_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY")  # environment variables tried in order
+# Claude Code can be pointed at GLM (ANTHROPIC_BASE_URL on a Z.ai / bigmodel.cn host); only then are its token variables GLM keys.
+CLAUDE_CODE_KEY_VARS = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
+GLM_HOSTS = ("z.ai", "bigmodel.cn")
 
 AUTO_LANG = "auto"  # source language "detect automatically" (Write / Paste window only)
 
@@ -36,17 +52,46 @@ DEFAULTS = {
     "font_px": DEFAULT_FONT_PX,
     "target_lang": "ru",
     "scope": "terminals",
+    "trigger": "any",
+    "clipboard_fallback": True,  # plain drag in Claude Code: read the terminal's own auto-copy (see cct.clip)
     "enabled": True,
     "proxy_mode": "auto",
     "allowlist": list(DEFAULT_ALLOWLIST),
     "allowlist_classes": list(DEFAULT_CLASSES),
     "first_run_done": False,
+    # GLM translation engine (second floating icon)
+    "glm_icon": True,
+    "glm_model": DEFAULT_GLM_MODEL,  # any model id is accepted (edit settings.json); the tray lists GLM_MODELS
+    "glm_base_url": DEFAULT_GLM_BASE_URL,
+    "glm_api_key": "",  # optional; ZAI_API_KEY in the environment is used when this is empty
     # Write / Paste window
     "writer_src": AUTO_LANG,
     "writer_dst": "en",
     "writer_font_in": DEFAULT_FONT_PX,
     "writer_font_out": DEFAULT_FONT_PX,
 }
+
+
+def _glm_host(env) -> str:
+    host = (urlparse(env.get("ANTHROPIC_BASE_URL", "").strip()).hostname or "").lower()
+    return next((h for h in GLM_HOSTS if host == h or host.endswith("." + h)), "")
+
+
+def glm_env_key(env=None) -> tuple:
+    """(variable name, key) of a GLM key found in the environment, or ('', ''). Never sends or logs anything."""
+    env = os.environ if env is None else env
+    names = GLM_KEY_VARS + (CLAUDE_CODE_KEY_VARS if _glm_host(env) else ())
+    for name in names:
+        value = env.get(name, "").strip()
+        if value:
+            return name, value
+    return "", ""
+
+
+def glm_env_base_url(env=None) -> str:
+    """Default API base URL, switched to the China region when Claude Code is pointed at bigmodel.cn."""
+    env = os.environ if env is None else env
+    return "https://open.bigmodel.cn/api/paas/v4" if _glm_host(env) == "bigmodel.cn" else DEFAULT_GLM_BASE_URL
 
 
 def clamp_font(px) -> int:
@@ -107,6 +152,8 @@ def normalize(data) -> dict:
         out["target_lang"] = valid_lang(data["target_lang"])
     if data.get("scope") in SCOPES:
         out["scope"] = data["scope"]
+    if data.get("trigger") in TRIGGERS:
+        out["trigger"] = data["trigger"]
     if data.get("proxy_mode") in PROXY_MODES:
         out["proxy_mode"] = data["proxy_mode"]
     if "allowlist" in data:
@@ -121,7 +168,15 @@ def normalize(data) -> dict:
     for key in ("writer_font_in", "writer_font_out"):
         if key in data:
             out[key] = snap_font(data[key])
-    for key in ("enabled", "first_run_done"):
+    model = data.get("glm_model")
+    if isinstance(model, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,40}", model.strip()):
+        out["glm_model"] = model.strip()
+    url = data.get("glm_base_url")
+    if isinstance(url, str) and re.fullmatch(r"https://[A-Za-z0-9.-]+(:\d+)?(/[A-Za-z0-9._~/-]*)?", url.strip()):
+        out["glm_base_url"] = url.strip().rstrip("/")
+    if isinstance(data.get("glm_api_key"), str):
+        out["glm_api_key"] = data["glm_api_key"].strip()[:MAX_KEY_CHARS]
+    for key in ("enabled", "first_run_done", "glm_icon", "clipboard_fallback"):
         if isinstance(data.get(key), bool):
             out[key] = data[key]
     return out

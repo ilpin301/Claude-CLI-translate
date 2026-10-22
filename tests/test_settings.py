@@ -55,10 +55,12 @@ def test_defaults_are_complete_and_independent():
 
 def test_full_roundtrip(tmp_path):
     p = str(tmp_path / "s.json")
-    custom = {"font_px": 19, "target_lang": "de", "scope": "all", "enabled": False,
+    custom = {"font_px": 19, "target_lang": "de", "scope": "all", "trigger": "shift", "clipboard_fallback": False, "enabled": False,
               "proxy_mode": "system", "allowlist": ["wt.exe", "code.exe"],
               "allowlist_classes": ["consolewindowclass", "myclass"], "first_run_done": True,
-              "writer_src": "de", "writer_dst": "fr", "writer_font_in": 13, "writer_font_out": 23}
+              "writer_src": "de", "writer_dst": "fr", "writer_font_in": 13, "writer_font_out": 23,
+              "glm_icon": False, "glm_model": "glm-4.7", "glm_api_key": "test-key",
+              "glm_base_url": "https://open.bigmodel.cn/api/paas/v4"}
     settings.save(custom, p)
     assert settings.load(p) == custom
 
@@ -116,3 +118,54 @@ def test_writer_defaults_and_validation():
     assert settings.normalize({"writer_src": "AUTO"})["writer_src"] == "auto"
     assert settings.normalize({"writer_src": "klingon"})["writer_src"] == "auto"
     assert settings.normalize({"writer_src": 5})["writer_src"] == "auto"
+
+
+def test_glm_settings_defaults_and_validation():
+    d = settings.normalize(None)
+    assert d["glm_icon"] is True and d["glm_api_key"] == ""
+    assert (d["glm_model"], d["glm_base_url"]) == (settings.DEFAULT_GLM_MODEL, settings.DEFAULT_GLM_BASE_URL)
+    out = settings.normalize({"glm_model": " glm-4.7 ", "glm_icon": False, "glm_api_key": "  abc.def  ",
+                              "glm_base_url": "https://open.bigmodel.cn/api/paas/v4/"})
+    assert (out["glm_model"], out["glm_icon"], out["glm_api_key"]) == ("glm-4.7", False, "abc.def")
+    assert out["glm_base_url"] == "https://open.bigmodel.cn/api/paas/v4"
+    bad = settings.normalize({"glm_model": "bad model!", "glm_icon": "yes", "glm_api_key": 5,
+                              "glm_base_url": "http://evil.example/ x"})
+    assert bad["glm_model"] == settings.DEFAULT_GLM_MODEL and bad["glm_icon"] is True
+    assert bad["glm_api_key"] == "" and bad["glm_base_url"] == settings.DEFAULT_GLM_BASE_URL
+    assert len(settings.normalize({"glm_api_key": "k" * 1000})["glm_api_key"]) == settings.MAX_KEY_CHARS
+
+
+def test_glm_key_from_environment():
+    assert settings.glm_env_key({}) == ("", "")
+    assert settings.glm_env_key({"ZAI_API_KEY": " k1 ", "GLM_API_KEY": "k2"}) == ("ZAI_API_KEY", "k1")
+    assert settings.glm_env_key({"GLM_API_KEY": "k2"}) == ("GLM_API_KEY", "k2")
+
+
+def test_claude_code_token_is_used_only_when_pointed_at_glm():
+    token = {"ANTHROPIC_AUTH_TOKEN": "tok"}
+    assert settings.glm_env_key(token) == ("", "")  # a real Anthropic key must never go to Z.ai
+    assert settings.glm_env_key(dict(token, ANTHROPIC_BASE_URL="https://api.anthropic.com")) == ("", "")
+    assert settings.glm_env_key(dict(token, ANTHROPIC_BASE_URL="https://evil-z.ai.example.com")) == ("", "")
+    assert settings.glm_env_key(dict(token, ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic")) == (
+        "ANTHROPIC_AUTH_TOKEN", "tok")
+    assert settings.glm_env_key({"ANTHROPIC_API_KEY": "k", "ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic"}
+                                ) == ("ANTHROPIC_API_KEY", "k")
+
+
+def test_glm_env_base_url_follows_the_region():
+    assert settings.glm_env_base_url({}) == settings.DEFAULT_GLM_BASE_URL
+    assert settings.glm_env_base_url({"ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic"}) == settings.DEFAULT_GLM_BASE_URL
+    assert settings.glm_env_base_url({"ANTHROPIC_BASE_URL": "https://open.bigmodel.cn/api/anthropic"}) == (
+        "https://open.bigmodel.cn/api/paas/v4")
+
+
+def test_trigger_setting():
+    assert settings.normalize(None)["trigger"] == "any"
+    assert settings.normalize({"trigger": "shift"})["trigger"] == "shift"
+    assert settings.normalize({"trigger": "bogus"})["trigger"] == "any"
+
+
+def test_clipboard_fallback_setting():
+    assert settings.normalize(None)["clipboard_fallback"] is True
+    assert settings.normalize({"clipboard_fallback": False})["clipboard_fallback"] is False
+    assert settings.normalize({"clipboard_fallback": "no"})["clipboard_fallback"] is True

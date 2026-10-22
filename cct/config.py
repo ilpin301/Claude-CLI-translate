@@ -1,7 +1,6 @@
 """Static constants. User-changeable options (language, scope, allowlist, proxy_mode, ...) live in cct.settings."""
 
 ALLOWLIST = frozenset({"windowsterminal.exe"})  # fallback only; the live allowlist is in settings.json
-REQUIRE_SHIFT = True
 MIN_DRAG_PX = 4
 ICON_SIZE = 40  # logical px at 100% DPI
 ICON_OFFSET = 10  # logical px from the mouse-up point
@@ -16,6 +15,8 @@ MAX_CHARS = 5000
 UIA_FIRST_DELAY_MS = 60
 UIA_RETRY_DELAY_MS = 250
 UIA_READ_TIMEOUT_MS = 500
+CLIPBOARD_WAIT_MS = 2000  # how long after mouse-up the clipboard fallback waits for the terminal's own copy
+CLIPBOARD_MAX_CHARS = 200000  # larger clipboard text is cut before it reaches the normaliser
 CONNECT_TIMEOUT_S = 5
 READ_TIMEOUT_S = 10
 CACHE_SIZE = 100

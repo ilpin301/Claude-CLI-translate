@@ -28,7 +28,7 @@ import queue  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 
-from . import config, winutil  # noqa: E402
+from . import clip, config, winutil  # noqa: E402
 
 log = logging.getLogger("cct.uia")
 
@@ -66,8 +66,11 @@ class SelectionWorker:
         self._latest += 1
         self._q.put(None)
 
-    def request(self, request_id: int, t0=None) -> None:
-        """Ask for a read; t0 (time.monotonic) is the mouse-up time the delays are measured from."""
+    def request(self, request_id: int, t0=None, clip_seq=None) -> None:
+        """Ask for a read; t0 (time.monotonic) is the mouse-up time the delays are measured from.
+
+        clip_seq (clipboard sequence number taken at mouse-down) enables the clipboard fallback for hosts whose
+        selection UIA cannot see; None keeps the app UIA-only."""
         t0 = time.monotonic() if t0 is None else t0
         started = self._call_started
         if started is not None and (time.monotonic() - started) * 1000 > config.UIA_READ_TIMEOUT_MS:
@@ -79,7 +82,7 @@ class SelectionWorker:
             self._on_result(request_id, None)
             return
         self._latest = request_id
-        self._q.put((request_id, t0))
+        self._q.put((request_id, t0, clip_seq))
 
     # ---- worker thread ----
 
@@ -112,7 +115,8 @@ class SelectionWorker:
             time.sleep(remaining)
         return request_id == self._latest  # False: superseded
 
-    def _handle(self, request_id, t0) -> None:
+    def _handle(self, request_id, t0, clip_seq=None) -> None:
+        skipped = False
         for delay in (config.UIA_FIRST_DELAY_MS, config.UIA_RETRY_DELAY_MS):
             if not self._wait_until(request_id, t0, delay):
                 return
@@ -121,8 +125,25 @@ class SelectionWorker:
                 self._deliver(request_id, text)
                 return
             if status == "skipped":
+                skipped = True
                 break
+        if clip_seq is not None and not skipped:
+            text = self._read_clipboard(request_id, t0, clip_seq)
+            if text:
+                self._deliver(request_id, text)
+                return
         self._deliver(request_id, None)
+
+    def _read_clipboard(self, request_id, t0, clip_seq) -> str:
+        started = time.monotonic()
+        fg_exe, _cls = winutil.foreground_window()
+        status, owner, text = clip.wait_for_copy(
+            clip_seq, winutil.clipboard_seq, winutil.clipboard_owner_exe, fg_exe,
+            lambda: winutil.clipboard_text(config.CLIPBOARD_MAX_CHARS),
+            t0 + config.CLIPBOARD_WAIT_MS / 1000.0, lambda: request_id == self._latest)
+        log.info("clipboard fallback status=%s owner=%s len=%d ms=%d", status, owner or "-", len(text),
+                 (time.monotonic() - started) * 1000)
+        return text
 
     def _read_once(self):
         started = time.monotonic()

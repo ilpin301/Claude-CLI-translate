@@ -1,6 +1,7 @@
 """Small Win32 helpers; every coordinate is a physical pixel."""
 import ctypes
 import os
+import time
 from ctypes import wintypes
 
 user32 = ctypes.WinDLL("user32")
@@ -30,7 +31,25 @@ shcore.GetDpiForMonitor.argtypes = [
     wintypes.HMONITOR, ctypes.c_int, ctypes.POINTER(wintypes.UINT), ctypes.POINTER(wintypes.UINT)]
 shcore.GetDpiForMonitor.restype = ctypes.c_long
 
+user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
+user32.GetClipboardOwner.restype = wintypes.HWND
+user32.OpenClipboard.argtypes = [wintypes.HWND]
+user32.OpenClipboard.restype = wintypes.BOOL
+user32.CloseClipboard.restype = wintypes.BOOL
+user32.GetClipboardData.argtypes = [wintypes.UINT]
+user32.GetClipboardData.restype = ctypes.c_void_p
+user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
+user32.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
+user32.RegisterClipboardFormatW.restype = wintypes.UINT
+kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+kernel32.GlobalLock.restype = ctypes.c_void_p
+kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
+kernel32.GlobalSize.restype = ctypes.c_size_t
+
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+CF_UNICODETEXT = 13
 MONITOR_DEFAULTTONEAREST = 2
 
 
@@ -109,3 +128,40 @@ def monitor_at(x: int, y: int):
     except OSError:
         pass
     return (work.left, work.top, work.right, work.bottom), scale
+
+
+def clipboard_seq() -> int:
+    """Clipboard change counter; it grows with every write by any application."""
+    return int(user32.GetClipboardSequenceNumber())
+
+
+def clipboard_owner_exe() -> str:
+    """Exe of the process that last wrote the clipboard, '' when it has no owner window."""
+    return window_exe(user32.GetClipboardOwner())
+
+
+def clipboard_text(max_chars: int) -> str:
+    """Unicode text on the clipboard ('' if none, busy, or marked private by its writer). Read-only."""
+    private = user32.RegisterClipboardFormatW("ExcludeClipboardContentFromMonitorProcessing")
+    if private and user32.IsClipboardFormatAvailable(private):
+        return ""  # password managers set this marker: never read it
+    for _attempt in range(5):  # another process may hold the clipboard for a moment
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.02)
+    else:
+        return ""
+    try:
+        handle = user32.GetClipboardData(CF_UNICODETEXT)
+        if not handle:
+            return ""
+        ptr = kernel32.GlobalLock(handle)
+        if not ptr:
+            return ""
+        try:
+            chars = min(kernel32.GlobalSize(handle) // 2, max_chars + 1)
+            return ctypes.wstring_at(ptr, chars).split("\0", 1)[0][:max_chars]
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
