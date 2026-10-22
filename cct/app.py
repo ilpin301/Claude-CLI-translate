@@ -3,8 +3,8 @@
 Flow: a mouse-drag trigger (any drag, or Shift+drag only, per the "trigger" setting) in an allowlisted window asks the UIA worker (cct.uia) for the selection;
 a non-empty result is normalised and the icons appear (Google, and GLM unless switched off). Nothing
 is translated or sent until an icon is clicked; then the stored text is translated on that engine's
-worker thread and the popup shows the result. The other icon stays until it is clicked or dismissed. Worker threads reach the GUI thread only through Qt signals. A mouse-down outside the popup
-(and not on the icon) closes it, a new selection closes it, a mouse-down inside it is not a selection.
+worker thread and the popup shows the result. The other icon stays until it is clicked or dismissed. Worker threads reach the GUI thread only through Qt signals. The popup stays open until its close button (x) is clicked: clicking elsewhere
+or selecting new text leaves it alone and only the next icon click replaces its content.
 """
 from . import uia  # noqa: F401  (must come first: sets sys.coinit_flags = 0 before PySide6/comtypes)
 
@@ -84,12 +84,11 @@ class App:
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cct-translate")
         self.glm_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cct-glm")
         self._req_id = 0  # bumped by every new selection and every outside mouse-down; stale reads are dropped
-        self._tr_id = 0  # bumped by every popup translation (and with _req_id); stale translations are dropped
-        self._engine = GOOGLE  # engine of the popup's current translation
+        self._tr_id = 0  # bumped by every popup translation; stale translations are dropped
+        self._shown = None  # (engine, text, truncated, lang, anchor) of the popup's translation, kept for Retry
         self._trigger_pt = (0, 0)
         self._text = None
         self._truncated = False
-        self._result_lang = self.settings["target_lang"]
         self._ignore_up = False
         self._clip_seq = None  # clipboard sequence number at the last mouse-down (None: fallback off)
         self._last_cursor = winutil.cursor_pos()
@@ -321,9 +320,7 @@ class App:
                 return
             self._ignore_up = False
             self._clip_seq = winutil.clipboard_seq() if self.settings["clipboard_fallback"] else None
-            self._req_id += 1  # invalidates any pending read or translation
-            self._tr_id += 1
-            self.popup.hide_popup()
+            self._req_id += 1  # invalidates any pending selection read; the popup stays until its close button
         elif msg == WM_LBUTTONUP and self._ignore_up:
             self._ignore_up = False
             self.gate.reset()
@@ -338,7 +335,6 @@ class App:
             return
         log.info("trigger exe=%s class=%s drag=%.0fpx", exe, cls, trigger.drag_px)
         self._req_id += 1
-        self._tr_id += 1
         self._trigger_pt = (trigger.x, trigger.y)
         self._text = None
         self.icon.hide_icon()  # the old icon belongs to the previous selection; a new one appears if this read succeeds
@@ -361,22 +357,22 @@ class App:
         self.icon.hide_icon(engine)  # only the clicked icon goes away; the other one stays until it is used
         if not self._text:
             return
-        self._engine = engine
-        self._result_lang = self.settings["target_lang"]
-        self._start_translation()
+        self._start_translation((engine, self._text, self._truncated, self.settings["target_lang"], self._trigger_pt))
 
     def on_retry(self) -> None:
-        if not self._text or not self.popup.isVisible():
+        if not self._shown or not self.popup.isVisible():
             return
         log.info("retry clicked")
-        self._start_translation()
+        self._start_translation(self._shown)  # the popup's own text: a newer selection may have replaced self._text
 
-    def _start_translation(self) -> None:
+    def _start_translation(self, shown) -> None:
+        self._shown = shown
+        engine, text, _truncated, lang, anchor = shown
         self._tr_id += 1  # an answer still on its way from the other engine is now stale
-        name = "Google" if self._engine == GOOGLE else self._glm_model_name()
-        self.popup.show_loading(*self._trigger_pt, self._result_lang, name, BAR_COLORS[self._engine])
-        pool = self.executor if self._engine == GOOGLE else self.glm_executor
-        pool.submit(self._translate, self._tr_id, self._engine, self._text, self._result_lang)
+        name = "Google" if engine == GOOGLE else self._glm_model_name()
+        self.popup.show_loading(*anchor, lang, name, BAR_COLORS[engine])
+        pool = self.executor if engine == GOOGLE else self.glm_executor
+        pool.submit(self._translate, self._tr_id, engine, text, lang)
 
     def _glm_model_name(self) -> str:
         model = self.settings["glm_model"]
@@ -400,7 +396,7 @@ class App:
         if result is None:
             self.popup.show_error(error, retryable)
         else:
-            self.popup.show_result(result, self._truncated, self._result_lang)
+            self.popup.show_result(result, self._shown[2], self._shown[3])
 
     def on_writer_request(self, req_id: int, text: str, source: str, target: str) -> None:
         self.executor.submit(self._translate_writer, req_id, text, source, target)
