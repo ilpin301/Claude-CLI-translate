@@ -3,16 +3,18 @@
 Layout (from the design sketch): left pane = what you type or paste (source language, size, Copy),
 right pane = the translation (Copy, size, target language), a Translate button between the panes
 (also Ctrl+Enter in the input). Nothing is sent anywhere until that button is pressed.
-The window never talks to the network itself: it emits `request(req_id, text, source, target)` and
+The window never talks to the network itself: it emits `request(req_id, text, source, target, engine)` and
 the app answers with show_result / show_error (same req_id). Answers for older requests are dropped.
+The engine buttons (Google / GLM) only choose which engine the next request uses; they never send anything.
 Copy buttons are explicit clipboard writes, like the popup's.
 """
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, QPolygonF, QShortcut
-from PySide6.QtWidgets import (QApplication, QComboBox, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
-                               QVBoxLayout, QWidget)
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QKeySequence, QPainter, QPainterPath, QPen, QPolygonF, QShortcut
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QComboBox, QHBoxLayout, QLabel, QPlainTextEdit,
+                               QPushButton, QVBoxLayout, QWidget)
 
 from . import config, settings
+from .icon import ENGINE_COLORS, GLM, GOOGLE
 
 BLUE = "#2b79c2"
 BTN_TEXT = "#d0d0d0"  # light gray text inside the pill buttons and dropdowns
@@ -85,8 +87,36 @@ class TranslateButton(QPushButton):
         painter.drawRect(self._BAR)
 
 
+class EngineButton(QPushButton):
+    """Checkable engine badge (Google / GLM): dim when off, full colour with a light border when selected."""
+
+    def __init__(self, engine: str):
+        super().__init__()
+        self.engine = engine
+        self.setCheckable(True)
+        self.setFixedSize(QSize(36, 36))
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setToolTip("Translate with Google" if engine == GOOGLE else "Translate with GLM")
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        checked = self.isChecked()
+        painter.setOpacity(1.0 if checked else 0.35)
+        painter.setBrush(QColor(ENGINE_COLORS[self.engine]))
+        painter.setPen(QPen(QColor(BTN_TEXT), 2) if checked else Qt.NoPen)
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(1, 1, -1, -1), 6, 6)
+        font = QFont("Segoe UI")
+        font.setBold(True)
+        font.setPixelSize(16 if self.engine == GOOGLE else 11)
+        painter.setFont(font)
+        painter.setPen(QColor("white"))
+        painter.drawText(self.rect(), Qt.AlignCenter, "A文" if self.engine == GOOGLE else "GLM")
+
+
 class WriterWindow(QWidget):
-    request = Signal(int, str, str, str)  # req_id, text, source ("auto" or code), target
+    request = Signal(int, str, str, str, str)  # req_id, text, source ("auto" or code), target, engine
     settings_changed = Signal()  # the user picked a language / size: the app should save the settings
 
     def __init__(self, opts: dict):
@@ -108,6 +138,11 @@ class WriterWindow(QWidget):
         self._src_copy = self._pill("Copy")
         self._dst_copy = self._pill("Copy")
         self._go = TranslateButton()
+        self._eng_google = EngineButton(GOOGLE)
+        self._eng_glm = EngineButton(GLM)
+        self._engines = QButtonGroup(self)  # exclusive: one engine is always selected
+        for btn in (self._eng_google, self._eng_glm):
+            self._engines.addButton(btn)
 
         self._input = QPlainTextEdit()
         self._input.setPlaceholderText("Type or paste text here...")
@@ -130,6 +165,8 @@ class WriterWindow(QWidget):
         left_top.addWidget(self._src_copy)
         right_top = QHBoxLayout()
         right_top.addWidget(self._dst_copy)
+        right_top.addWidget(self._eng_google)
+        right_top.addWidget(self._eng_glm)
         right_top.addStretch(1)
         right_top.addWidget(self._dst_size)
         right_top.addWidget(self._dst_lang)
@@ -164,6 +201,7 @@ class WriterWindow(QWidget):
         self._dst_lang.currentIndexChanged.connect(self._on_lang_changed)
         self._src_size.currentIndexChanged.connect(self._on_size_changed)
         self._dst_size.currentIndexChanged.connect(self._on_size_changed)
+        self._engines.buttonClicked.connect(self._on_engine_changed)
         self._go.clicked.connect(self._send)
         for keys in ("Ctrl+Return", "Ctrl+Enter"):
             shortcut = QShortcut(QKeySequence(keys), self._input)
@@ -214,6 +252,8 @@ class WriterWindow(QWidget):
             idx = combo.findData(self.opts[key])
             combo.setCurrentIndex(max(idx, 0))
             combo.blockSignals(False)
+        (self._eng_glm if self.opts["writer_engine"] == GLM else self._eng_google).setChecked(True)
+        self._apply_tint()
         self._apply_fonts()
 
     def present(self) -> None:
@@ -269,6 +309,15 @@ class WriterWindow(QWidget):
             font.setPixelSize(self.opts[key])
             edit.setFont(font)
 
+    def _apply_tint(self) -> None:
+        out_bg = "#261c58" if self.opts["writer_engine"] == GLM else "#0c2549"
+        self._out.setStyleSheet("QPlainTextEdit {background:%s;}" % out_bg)
+
+    def _on_engine_changed(self, btn) -> None:
+        self.opts["writer_engine"] = btn.engine
+        self._apply_tint()
+        self.settings_changed.emit()
+
     def _on_lang_changed(self) -> None:
         self.opts["writer_src"] = self._src_lang.currentData()
         self.opts["writer_dst"] = self._dst_lang.currentData()
@@ -287,7 +336,8 @@ class WriterWindow(QWidget):
             return
         self._req_id += 1
         self._set_status("Translating...")
-        self.request.emit(self._req_id, text[:config.MAX_CHARS], self.opts["writer_src"], self.opts["writer_dst"])
+        self.request.emit(self._req_id, text[:config.MAX_CHARS], self.opts["writer_src"], self.opts["writer_dst"],
+                          self.opts["writer_engine"])
 
     def _copy(self, text: str, button: QPushButton) -> None:
         if not text:

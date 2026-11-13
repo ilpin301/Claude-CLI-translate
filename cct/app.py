@@ -398,14 +398,15 @@ class App:
         else:
             self.popup.show_result(result, self._shown[2], self._shown[3])
 
-    def on_writer_request(self, req_id: int, text: str, source: str, target: str) -> None:
-        self.executor.submit(self._translate_writer, req_id, text, source, target)
+    def on_writer_request(self, req_id: int, text: str, source: str, target: str, engine: str) -> None:
+        pool = self.glm_executor if engine == GLM else self.executor
+        pool.submit(self._translate_writer, req_id, text, source, target, engine)
 
-    def _translate_writer(self, req_id: int, text: str, source: str, target: str) -> None:  # translate thread
+    def _translate_writer(self, req_id: int, text: str, source: str, target: str, engine: str) -> None:  # translate thread
         if req_id != self.writer.current_id:
             return  # the user kept typing; a newer request follows
         try:
-            result = self.translator.translate(text, target, source)
+            result = self.translators[engine].translate(text, target, source)
         except TranslateError as exc:
             self.bridge.written.emit(req_id, None, str(exc), exc.retryable)
             return
