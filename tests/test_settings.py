@@ -59,7 +59,7 @@ def test_full_roundtrip(tmp_path):
               "proxy_mode": "system", "allowlist": ["wt.exe", "code.exe"],
               "allowlist_classes": ["consolewindowclass", "myclass"], "first_run_done": True,
               "writer_src": "de", "writer_dst": "fr", "writer_font_in": 13, "writer_font_out": 23,
-              "glm_icon": False, "glm_model": "glm-4.7", "glm_api_key": "test-key",
+              "writer_engine": "glm", "glm_icon": False, "glm_model": "glm-4.7", "glm_api_key": "test-key",
               "glm_base_url": "https://open.bigmodel.cn/api/paas/v4"}
     settings.save(custom, p)
     assert settings.load(p) == custom
@@ -69,6 +69,13 @@ def test_invalid_values_fall_back_per_key():
     got = settings.normalize({"target_lang": "xx", "scope": "bogus", "proxy_mode": 5,
                               "enabled": "yes", "first_run_done": 1, "font_px": 16})
     assert got == settings.normalize(None)
+
+
+def test_writer_engine_default_and_validation():
+    assert settings.normalize(None)["writer_engine"] == "google"
+    assert settings.normalize({"writer_engine": "glm"})["writer_engine"] == "glm"
+    for bad in ("bing", 5):
+        assert settings.normalize({"writer_engine": bad})["writer_engine"] == "google"
 
 
 def test_language_is_case_insensitive_and_canonical():

@@ -69,6 +69,7 @@ DEFAULTS = {
     "writer_dst": "en",
     "writer_font_in": DEFAULT_FONT_PX,
     "writer_font_out": DEFAULT_FONT_PX,
+    "writer_engine": "google",  # "google" or "glm"
 }
 
 
@@ -165,6 +166,8 @@ def normalize(data) -> dict:
             data["writer_src"], AUTO_LANG)
     if "writer_dst" in data:
         out["writer_dst"] = valid_lang(data["writer_dst"], DEFAULTS["writer_dst"])
+    if data.get("writer_engine") in ("google", "glm"):
+        out["writer_engine"] = data["writer_engine"]
     for key in ("writer_font_in", "writer_font_out"):
         if key in data:
             out[key] = snap_font(data[key])
